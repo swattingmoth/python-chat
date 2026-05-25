@@ -1,0 +1,45 @@
+{
+    // Python environment (uv-managed .venv)
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true,
+
+    // Testing with pytest (configured in pyproject.toml)
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestArgs": [
+        "--rootdir=${workspaceFolder}",
+        "tests"
+    ],
+    "python.testing.autoTestDiscoverOnSaveEnabled": true,
+
+    // Mypy strict type checking (via mypy-type-checker extension or built-in)
+    "mypy-type-checker.args": [
+        "--strict",
+        "--config-file=${workspaceFolder}/pyproject.toml"
+    ],
+    "mypy-type-checker.importStrategy": "fromEnvironment",
+    "mypy-type-checker.reportingScope": "workspace",
+
+    // Editor settings for Python
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        },
+        "editor.defaultFormatter": "ms-python.black-formatter"
+    },
+
+    // General
+    "editor.rulers": [88],
+    "files.associations": {
+        "*.md": "markdown"
+    },
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.mypy_cache": true,
+        "**/.pytest_cache": true
+    },
+
+    // Future: Ruff, isort etc. when added
+    "ruff.importStrategy": "fromEnvironment"
+}
