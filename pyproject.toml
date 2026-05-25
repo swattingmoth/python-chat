@@ -7,7 +7,13 @@ authors = [
     { name = "swattingmoth", email = "swattingmoth@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "attrs>=26.1.0",
+    "dotenv>=0.9.9",
+    "gradio>=6.14.0",
+    "openai>=2.38.0",
+    "python-env>=1.0.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]

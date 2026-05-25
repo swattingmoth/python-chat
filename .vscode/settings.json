@@ -30,7 +30,7 @@
     },
 
     // General
-    "editor.rulers": [88],
+    "editor.rulers": [100],
     "files.associations": {
         "*.md": "markdown"
     },
