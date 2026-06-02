@@ -143,7 +143,18 @@ class Tools:
 
 
 def get_property_type(annotation: Any, for_xai: bool) -> str:
-    """Return the JSON property type name for a function annotation."""
+    """Return the JSON property type name for a function annotation.
+
+    Supports both concrete types and string annotations (from `from __future__ import annotations`).
+    """
+    if isinstance(annotation, str):
+        # Handle postponed annotations (string form)
+        if for_xai and annotation in {"str", "string"}:
+            return "string"
+        if annotation in {"int", "float", "bool", "list", "dict", "object"}:
+            return annotation
+        return annotation if annotation else "str"
+
     if for_xai:
         if annotation == str or annotation == inspect.Parameter.empty:
             return "string"

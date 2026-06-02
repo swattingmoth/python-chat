@@ -49,6 +49,15 @@ class ModelContext:
             "ModelContext has not been initialized. Call ModelContext.create(client, image_path) first."
         )
 
+    @classmethod
+    def reset(cls) -> None:
+        """Reset the singleton instance.
+
+        Intended primarily for tests to allow fresh initialization between cases
+        without affecting production singleton semantics.
+        """
+        cls._instance = None
+
     @property
     def model_name(self) -> str:
         """Get the name of the current model in use."""
