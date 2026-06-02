@@ -16,6 +16,7 @@ class ModelContext:
         self._client = client
         self._image_path = image_path
         self._tools = Tools()
+        self._additional_tools: list[dict[str, Any]] = []
 
     @classmethod
     def create(cls, client: OpenAI, image_path: str) -> "ModelContext":
@@ -68,6 +69,15 @@ class ModelContext:
         """Set the current model name."""
         self._validate_model(value)
         self._model_name = value
+        if self.model_name == Models.COMPLEX_QUESTIONS:
+            # The chat completions tools interface accepts built-in live search,
+            # not a custom "web_search" type. Code execution should be exposed
+            # via a registered function tool instead of an unsupported tool type.
+            self._additional_tools = [
+                {"type": "live_search"},
+            ]
+        else:
+            self._additional_tools = []
 
     def _validate_model(self, model_name: str) -> None:
         if model_name not in [
@@ -108,7 +118,7 @@ class ModelContext:
 
     def get_tools_for_model(self) -> list[dict[str, Any]]:
         """Return the tool metadata formatted for model use."""
-        return self._tools.get_tools_for_model()
+        return self._tools.get_tools_for_model(self._additional_tools)
 
     @contextmanager
     def use_model(self, model_name: str) -> Generator[None, None, None]:

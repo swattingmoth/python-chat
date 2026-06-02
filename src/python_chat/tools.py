@@ -135,11 +135,17 @@ class Tools:
 
         return responses, tool_results
 
-    def get_tools_for_model(self) -> list[dict[str, Any]]:
+    def get_tools_for_model(
+        self, additional_tools: Optional[list[dict[str, Any]]] = None
+    ) -> list[dict[str, Any]]:
         """Return the tool metadata formatted for the model's tool interface."""
-        return [
+        tools = [
             {"type": "function", "function": self.tools[t]["json"]} for t in self.tools
         ]
+
+        if additional_tools:
+            tools.extend(additional_tools)
+        return tools
 
 
 def get_property_type(annotation: Any, for_xai: bool) -> str:

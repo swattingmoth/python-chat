@@ -135,3 +135,21 @@ def test_model_context_use_model_validates_on_entry() -> None:
     with pytest.raises(ValueError):
         with ctx.use_model("bad-model"):
             pass  # never reached
+
+
+def test_model_context_complex_questions_adds_additional_tools() -> None:
+    """Switching to COMPLEX_QUESTIONS model adds web_search and code_interpreter tools."""
+    fake_client = MagicMock()
+    ctx = ModelContext.create(fake_client, "/p")
+
+    assert ctx.get_tools_for_model() == []  # no additional tools for QUESTIONS
+
+    ctx.model_name = Models.COMPLEX_QUESTIONS
+    tools = ctx.get_tools_for_model()
+    tool_types = {t["type"] for t in tools}
+    assert "live_search" in tool_types
+
+    ctx.model_name = Models.QUESTIONS
+    assert (
+        ctx.get_tools_for_model() == []
+    )  # additional tools should be removed when switching

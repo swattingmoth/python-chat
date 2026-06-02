@@ -318,10 +318,15 @@ def test_chat_handles_tool_call_and_continues_for_non_image_tool(
     yields = list(iface.chat("What day is it?", [], "Question"))
 
     handler.assert_called_once()  # type: ignore[attr-defined]
-    # History: user, (tool role), assistant(final)
-    assert len(iface.chat_history) == 3
-    assert iface.chat_history[1]["role"] == "tool"
-    assert "2025-09-18" in iface.chat_history[2]["content"]
+    # History: user, assistant(with tool_calls), tool(result), assistant(final)
+    assert len(iface.chat_history) == 4
+    assert iface.chat_history[0]["role"] == "user"
+    assert iface.chat_history[1]["role"] == "assistant"
+    assert "tool_calls" in iface.chat_history[1]
+    assert iface.chat_history[2]["role"] == "tool"
+    assert iface.chat_history[2]["content"] == "2025-09-18"
+    assert iface.chat_history[3]["role"] == "assistant"
+    assert "2025-09-18" in iface.chat_history[3]["content"]
 
     # At least one yield should contain the tool role entry (after first collect)
     tool_yield_found = any(

@@ -131,6 +131,7 @@ class ChatInterface:
                 yield ("text", token)
 
             if delta.tool_calls:
+                print(f"Received tool call chunk: {delta.tool_calls}")
                 for tc in delta.tool_calls:
                     idx = getattr(tc, "index", 0) or 0
                     if idx not in tool_calls_by_index:
@@ -152,6 +153,7 @@ class ChatInterface:
                 and tool_calls_by_index
             ):
                 tool_message = SimpleNamespace(tool_calls=[])
+                tool_calls_list: list[dict[str, Any]] = []
                 for tool_call_info in tool_calls_by_index.values():
                     function = SimpleNamespace(
                         name=tool_call_info["function"]["name"],
@@ -163,9 +165,20 @@ class ChatInterface:
                             function=function,
                         )
                     )
+                    tool_calls_list.append(
+                        {
+                            "id": tool_call_info["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tool_call_info["function"]["name"],
+                                "arguments": tool_call_info["function"]["arguments"],
+                            },
+                        }
+                    )
                 tool_calls_by_index.clear()
 
                 tool_responses, tool_results = self._tool_handler(tool_message)
+                yield ("assistant_tool_call", tool_calls_list)
                 yield ("tool_call", tool_responses)
                 yield ("tool_result", tool_results)
 
@@ -199,7 +212,7 @@ class ChatInterface:
             }
         ], self.image  # Yield initial state with user message added
 
-        model = get_model_for_choice(choice)
+        self.modelContext.model_name = get_model_for_choice(choice)
         is_image_mode = choice == "Generate Image"
 
         try:
@@ -221,17 +234,20 @@ class ChatInterface:
                     if self.modelContext is not None
                     else []
                 )
-                stream = self._completer(model, messages, tools)
+                stream = self._completer(self.modelContext.model_name, messages, tools)
 
                 # Collect and stream all chunks
                 full_response = ""
                 tool_calls = []
+                tool_calls_for_history = None
                 for item_type, tool_results in self._collect_stream(stream):
                     if item_type == "text":
                         full_response += tool_results
                         yield local_chat_history + [
                             {"role": "assistant", "content": full_response or ""}
                         ], self.image
+                    elif item_type == "assistant_tool_call":
+                        tool_calls_for_history = tool_results
                     elif item_type == "tool_call":
                         tool_calls.extend(tool_results)
                     elif item_type == "tool_result" and is_image_mode:
@@ -253,6 +269,15 @@ class ChatInterface:
                     }
                     self.chat_history.append(history_entry)
                     local_chat_history.append(history_entry)
+                if tool_calls_for_history:
+                    # Add the assistant message with tool_calls before adding tool results
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": tool_calls_for_history,
+                    }
+                    self.chat_history.append(assistant_message)
+                    local_chat_history.append(assistant_message)
                 if tool_calls:
                     self.chat_history.extend(tool_calls)
                     local_chat_history.extend(tool_calls)

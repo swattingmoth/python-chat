@@ -306,3 +306,22 @@ def test_tools_handle_tool_calls_with_no_tool_calls() -> None:
     responses, results = tools.handle_tool_calls(msg)
     assert responses == []
     assert results == []
+
+
+def test_tools_return_additional_tools() -> None:
+    """get_tools_for_model can include additional tools beyond the registered ones."""
+    tools = Tools()
+
+    def dummy() -> None:
+        pass
+
+    tools.register_tool(dummy, "does nothing")
+
+    additional = [
+        {"type": "extra_tool"},
+    ]
+
+    formatted = tools.get_tools_for_model(additional_tools=additional)
+    assert len(formatted) == 2
+    assert formatted[0]["type"] == "function"
+    assert formatted[1]["type"] == "extra_tool"
