@@ -50,8 +50,8 @@ def launch_app() -> gr.Blocks:
         choice.change(fn=on_choice_change, inputs=choice, outputs=image_output)
 
         def handle_submit(
-            message: str, chat_history: list[dict[str, str]], selected_choice: str
-        ) -> Generator[tuple[list[dict[str, str]], str, Optional[bytes]], None, None]:
+            message: str, chat_history: list[dict[str, Any]], selected_choice: str
+        ) -> Generator[tuple[list[dict[str, Any]], str, Optional[bytes]], None, None]:
             """Handle message submission."""
             if not message:
                 yield chat_history, "", None
@@ -62,7 +62,7 @@ def launch_app() -> gr.Blocks:
             ):
                 yield updated_history, "", image_data
 
-        def handle_clear() -> tuple[list[dict[str, str]], str, Optional[bytes]]:
+        def handle_clear() -> tuple[list[dict[str, Any]], str, Optional[bytes]]:
             """Handle clear button."""
             cleared_history = chat_interface.clear_history()
             return cleared_history, "", None

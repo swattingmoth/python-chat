@@ -1,8 +1,11 @@
+import code
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, Callable, Generator, Optional
 
-from openai import OpenAI
+from xai_sdk import Client
+from xai_sdk.tools import web_search, code_execution
+from xai_sdk.proto import chat_pb2
 
 from python_chat.api import Models
 from python_chat.tools import Tools, ToolResult
@@ -11,19 +14,19 @@ from python_chat.tools import Tools, ToolResult
 class ModelContext:
     _instance: Optional["ModelContext"] = None
 
-    def __init__(self, client: OpenAI, image_path: str):
+    def __init__(self, client: Client, image_path: str):
         self.model_name = Models.QUESTIONS
         self._client = client
         self._image_path = image_path
         self._tools = Tools()
-        self._additional_tools: list[dict[str, Any]] = []
+        self._additional_tools: list[Any] = []
 
     @classmethod
-    def create(cls, client: OpenAI, image_path: str) -> "ModelContext":
+    def create(cls, client: Client, image_path: str) -> "ModelContext":
         """Initialize or return the singleton ModelContext instance.
 
         Args:
-            client (OpenAI): The OpenAI client instance used for API calls.
+            client (Client): The xAI SDK client instance used for API calls.
             image_path (str): Directory path where generated images will be saved.
 
         Returns:
@@ -70,12 +73,9 @@ class ModelContext:
         self._validate_model(value)
         self._model_name = value
         if self.model_name == Models.COMPLEX_QUESTIONS:
-            # The chat completions tools interface accepts built-in live search,
-            # not a custom "web_search" type. Code execution should be exposed
-            # via a registered function tool instead of an unsupported tool type.
-            self._additional_tools = [
-                {"type": "live_search"},
-            ]
+            # Use the native server-side web_search tool for complex questions.
+            # The tool is executed inside the model's request (cost_usd covers it).
+            self._additional_tools = [web_search(), code_execution()]
         else:
             self._additional_tools = []
 
@@ -88,8 +88,8 @@ class ModelContext:
             raise ValueError(f"Invalid model name: {model_name}")
 
     @property
-    def client(self) -> OpenAI:
-        """Get the OpenAI client used by this context."""
+    def client(self) -> Client:
+        """Get the xAI SDK client used by this context."""
         return self._client
 
     @property
@@ -102,22 +102,33 @@ class ModelContext:
         """Get the registered tool manager."""
         return self._tools
 
-    def register_tool(self, func: Callable[..., Any], description: str) -> None:
-        """Register a callable as a tool for the LLM to use."""
-        self._tools.register_tool(func, description)
+    def register_tool(
+        self,
+        func: Callable[..., Any],
+        description: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> None:
+        """Register a callable as a tool for the LLM to use.
+
+        Args:
+            func: The function to register.
+            description: Optional description (falls back to docstring).
+            name: Optional name override (defaults to func.__name__).
+        """
+        self._tools.register_tool(func, description=description, name=name)
 
     def remove_tool(self, func: Callable[..., Any]) -> None:
         """Remove a registered tool from the tool registry."""
         self._tools.remove_tool(func)
 
     def handle_tool_calls(
-        self, message: SimpleNamespace
+        self, tool_calls: list[chat_pb2.ToolCall]
     ) -> tuple[list[dict[str, Any]], list[ToolResult | None]]:
         """Execute tool calls requested by the model and return their responses."""
-        return self._tools.handle_tool_calls(message)
+        return self._tools.handle_tool_calls(tool_calls)
 
-    def get_tools_for_model(self) -> list[dict[str, Any]]:
-        """Return the tool metadata formatted for model use."""
+    def get_tools_for_model(self) -> list[Any]:
+        """Return the tool objects (xai chat tool protos) formatted for model use."""
         return self._tools.get_tools_for_model(self._additional_tools)
 
     @contextmanager

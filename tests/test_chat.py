@@ -6,22 +6,13 @@ for high coverage without real API calls or side effects.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, Generator
 from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image as PILImage
-
-from openai.types.chat.chat_completion_chunk import (
-    ChatCompletionChunk,
-    Choice,
-    ChoiceDelta,
-    ChoiceDeltaToolCall,
-    ChoiceDeltaToolCallFunction,
-)
 
 from python_chat.api import Models
 from python_chat.chat import (
@@ -33,46 +24,29 @@ from python_chat.chat import (
 )
 from python_chat.tools import ToolResult
 
-# --- Helpers for realistic fake streams ---
+# --- Helpers for realistic fake streams (xai-sdk style) ---
+# The chat() loop now consumes Generator[tuple[response, chunk], ...] directly.
+# Tool calls are provided on the *final* response object (no delta accumulation in our code).
+# We use SimpleNamespace to simulate the minimal attrs accessed: chunk.content, response.tool_calls
 
 
-def _make_chunk(
-    content: str | None = None,
-    tool_calls: list[ChoiceDeltaToolCall] | None = None,
-    finish_reason: str | None = None,
-) -> ChatCompletionChunk:
-    """Create a minimal valid ChatCompletionChunk for testing."""
-    delta = ChoiceDelta(content=content, tool_calls=tool_calls)
-    choice = Choice(index=0, delta=delta, finish_reason=finish_reason)  # type: ignore[arg-type]
-    return ChatCompletionChunk(
-        id="chunk-test",
-        choices=[choice],
-        created=1_700_000_000,
-        model="test-model",
-        object="chat.completion.chunk",
-    )
+def _make_chunk(content: str | None = None) -> Any:
+    """Create a minimal chunk with .content (incremental text token or None)."""
+    return SimpleNamespace(content=content)
 
 
-def _make_tool_call_delta(
-    index: int = 0,
-    tool_id: str | None = None,
-    name: str | None = None,
-    arguments: str | None = None,
-) -> ChoiceDeltaToolCall:
-    """Create a tool call delta fragment (supports incremental streaming)."""
-    func = None
-    if name is not None or arguments is not None:
-        func = ChoiceDeltaToolCallFunction(name=name, arguments=arguments)
-    return ChoiceDeltaToolCall(index=index, id=tool_id, function=func)
+def _make_response(tool_calls: list[Any] | None = None) -> Any:
+    """Create a response object; tool_calls (if present) are inspected after streaming a turn."""
+    return SimpleNamespace(tool_calls=tool_calls or [])
 
 
-def make_text_only_stream(text: str) -> list[ChatCompletionChunk]:
-    """Simple single response stream (no tools)."""
-    # Split into a couple tokens to exercise multiple yields
+def make_text_only_stream(text: str) -> list[tuple[Any, Any]]:
+    """Simple single response stream (no tools). Yields (resp, chunk) pairs."""
+    # Split into a couple tokens to exercise multiple yields + final content
     tokens = [text[: len(text) // 2], text[len(text) // 2 :]]
     return [
-        _make_chunk(content=tokens[0]),
-        _make_chunk(content=tokens[1], finish_reason="stop"),
+        (_make_response(), _make_chunk(content=tokens[0])),
+        (_make_response(), _make_chunk(content=tokens[1])),
     ]
 
 
@@ -80,70 +54,53 @@ def make_tool_call_stream(
     tool_name: str = "today_date",
     arguments: str = "{}",
     preceding_text: str | None = None,
-) -> list[ChatCompletionChunk]:
-    """Stream that ends with a tool call (optionally with text first)."""
-    chunks: list[ChatCompletionChunk] = []
+) -> list[tuple[Any, Any]]:
+    """Stream that ends with a (client-side) tool call on the final response.
+
+    Optionally includes preceding assistant text content.
+    """
+    pairs: list[tuple[Any, Any]] = []
     if preceding_text:
-        chunks.append(_make_chunk(content=preceding_text))
-    # Simulate split: id+name in first, arguments in second + finish
-    chunks.append(
-        _make_chunk(
-            tool_calls=[
-                _make_tool_call_delta(
-                    index=0, tool_id="call_123", name=tool_name, arguments=""
-                )
-            ]
-        )
+        pairs.append((_make_response(), _make_chunk(content=preceding_text)))
+    # The tool_calls live on the response of the last yielded pair for this turn.
+    tc = SimpleNamespace(
+        id="call_123",
+        function=SimpleNamespace(name=tool_name, arguments=arguments),
     )
-    chunks.append(
-        _make_chunk(
-            tool_calls=[_make_tool_call_delta(index=0, arguments=arguments)],
-            finish_reason="tool_calls",
-        )
+    pairs.append((_make_response(tool_calls=[tc]), _make_chunk(content=None)))
+    return pairs
+
+
+def make_multi_tool_call_stream() -> list[tuple[Any, Any]]:
+    """Stream with two parallel client-side tool calls (on final response)."""
+    tc0 = SimpleNamespace(
+        id="call_a", function=SimpleNamespace(name="today_date", arguments="{}")
     )
-    return chunks
-
-
-def make_multi_tool_call_stream() -> list[ChatCompletionChunk]:
-    """Stream with two parallel tool calls to cover index handling."""
-    return [
-        _make_chunk(
-            tool_calls=[
-                _make_tool_call_delta(0, "call_a", "today_date", ""),
-                _make_tool_call_delta(1, "call_b", "other", ""),
-            ]
-        ),
-        _make_chunk(
-            tool_calls=[
-                _make_tool_call_delta(0, arguments="{}"),
-                _make_tool_call_delta(1, arguments='{"x":1}'),
-            ],
-            finish_reason="tool_calls",
-        ),
-    ]
-
-
-def make_error_stream() -> list[ChatCompletionChunk]:
-    """A stream that will cause issues if iterated (for except path)."""
-    # We trigger exception by raising inside the completer, not the stream itself.
-    return []
+    tc1 = SimpleNamespace(
+        id="call_b", function=SimpleNamespace(name="other", arguments='{"x":1}')
+    )
+    return [(_make_response(tool_calls=[tc0, tc1]), _make_chunk(content=None))]
 
 
 def create_responder(
-    streams: list[list[ChatCompletionChunk]],
+    streams: list[list[tuple[Any, Any]]],
 ) -> Callable[
-    [str, list[dict[str, Any]], list[dict[str, Any]]], Iterator[ChatCompletionChunk]
+    [str, list[dict[str, Any]], list[Any]], Generator[tuple[Any, Any], None, None]
 ]:
-    """Stateful fake completer that returns successive streams on each call."""
+    """Stateful fake completer that yields successive (response, chunk) streams.
+
+    Matches the new ChatCompleter contract used by ChatInterface.chat.
+    """
     call_idx = 0
 
     def completer(
-        model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Iterator[ChatCompletionChunk]:
+        model: str, messages: list[dict[str, Any]], tools: list[Any]
+    ) -> Generator[tuple[Any, Any], None, None]:
         nonlocal call_idx
         stream = streams[min(call_idx, len(streams) - 1)]
         call_idx += 1
-        return iter(stream)
+        for pair in stream:
+            yield pair
 
     return completer
 
@@ -231,7 +188,7 @@ def test_chat_does_nothing_and_returns_history_when_message_empty(
 ) -> None:
     """Early return path when no user message is provided."""
     iface = ChatInterface(mock_context)
-    initial_history: list[dict[str, str]] = [{"role": "user", "content": "prior"}]
+    initial_history: list[dict[str, Any]] = [{"role": "user", "content": "prior"}]
 
     result = list(iface.chat("", initial_history, "Question"))
 
@@ -248,7 +205,7 @@ def test_chat_streams_single_simple_response_and_updates_history(
     chunks = make_text_only_stream("Hello there, how can I help?")
     responder = create_responder([chunks])
 
-    iface = ChatInterface(mock_context, completer=responder)  # type: ignore[arg-type]
+    iface = ChatInterface(mock_context, completer=responder)
 
     yields = list(iface.chat("Hi", [], "Question"))
 
@@ -280,7 +237,7 @@ def test_chat_multiple_turns_accumulates_history_correctly(
     chunks1 = make_text_only_stream("First answer.")
     chunks2 = make_text_only_stream("Second answer following up.")
 
-    iface = ChatInterface(mock_context, completer=create_responder([chunks1, chunks2]))  # type: ignore[arg-type]
+    iface = ChatInterface(mock_context, completer=create_responder([chunks1, chunks2]))
 
     _ = list(iface.chat("First question", [], "Question"))
     yields2 = list(iface.chat("Follow up?", [], "Question"))
@@ -298,7 +255,7 @@ def test_chat_multiple_turns_accumulates_history_correctly(
 def test_chat_handles_tool_call_and_continues_for_non_image_tool(
     mock_context: MagicMock,
 ) -> None:
-    """Tool call path: _collect_stream yields tool_call/tool_result, handler invoked, loop continues for final answer."""
+    """Tool call path: stream yields content then final response carries tool_calls; handler invoked, loop continues for final answer."""
     # No preceding text so first collect produces only the tool items (full_response stays ""),
     # leading to history of exactly [user, tool, final_asst] after the continue + second turn.
     tool_stream = make_tool_call_stream()
@@ -311,7 +268,7 @@ def test_chat_handles_tool_call_and_continues_for_non_image_tool(
 
     iface = ChatInterface(
         mock_context,
-        completer=create_responder([tool_stream, final_stream]),  # type: ignore[arg-type]
+        completer=create_responder([tool_stream, final_stream]),
         tool_handler=handler,
     )
 
@@ -359,7 +316,7 @@ def test_chat_tool_call_to_generate_image_sets_image_and_stops(
 
     iface = ChatInterface(
         mock_context,
-        completer=create_responder([img_stream]),  # type: ignore[arg-type]
+        completer=create_responder([img_stream]),
         tool_handler=handler,
     )
 
@@ -391,11 +348,11 @@ def test_chat_catches_exception_and_yields_generic_error(
     """Exception path in the main chat loop produces a friendly error message."""
 
     def exploding_completer(
-        model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Iterator[ChatCompletionChunk]:
+        model: str, messages: list[dict[str, Any]], tools: list[Any]
+    ) -> Generator[tuple[Any, Any], None, None]:
         raise RuntimeError("boom from test")
 
-    iface = ChatInterface(mock_context, completer=exploding_completer)  # type: ignore[arg-type]
+    iface = ChatInterface(mock_context, completer=exploding_completer)
 
     yields = list(iface.chat("Trigger error", [], "Question"))
 
@@ -423,10 +380,14 @@ def test_clear_history_resets_chat_and_image_state(
     assert iface.image is None
 
 
-def test_collect_stream_handles_multiple_tool_calls_and_argument_accumulation(
+def test_chat_handles_multiple_parallel_tool_calls(
     mock_context: MagicMock,
 ) -> None:
-    """_collect_stream correctly merges parallel tool calls and concatenates streamed arguments."""
+    """Chat loop correctly surfaces multiple parallel client-side tool calls to the handler.
+
+    (Replaces prior _collect_stream delta accumulation test; xai-sdk provides complete
+    tool_calls on the final Response, which chat() normalizes and passes through.)
+    """
     multi_stream = make_multi_tool_call_stream()
 
     # Handler will be called with reconstructed tool_calls (we just need it not to explode)
@@ -444,7 +405,7 @@ def test_collect_stream_handles_multiple_tool_calls_and_argument_accumulation(
     finisher = make_text_only_stream("Done with tools.")
     iface = ChatInterface(
         mock_context,
-        completer=create_responder([multi_stream, finisher]),  # type: ignore[arg-type]
+        completer=create_responder([multi_stream, finisher]),
         tool_handler=handler,
     )
 
@@ -479,7 +440,7 @@ def test_chat_tool_result_without_image_mode_does_not_set_image(
     finisher = make_text_only_stream("Acknowledged tool result.")
     iface = ChatInterface(
         mock_context,
-        completer=create_responder([tool_stream, finisher]),  # type: ignore[arg-type]
+        completer=create_responder([tool_stream, finisher]),
         tool_handler=handler,
     )
 

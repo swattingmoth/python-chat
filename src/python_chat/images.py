@@ -1,8 +1,8 @@
+import base64
 import os
 import uuid
 
-from openai import OpenAI, omit
-import base64
+from xai_sdk import Client
 
 from python_chat.api import Models
 from python_chat.context import ModelContext
@@ -10,19 +10,38 @@ from python_chat.tools import ToolResult
 
 
 def generate_image(
-    prompt: str, model: str, client: OpenAI, image_path: str
+    prompt: str, model: str, client: Client, image_path: str
 ) -> tuple[str, bytes]:
-    """Example function to generate an image using the API."""
-    image_system_prompt = "Generate an image based on the request below. The generaged image must not include any nudity, suggestive content, or graphic violence. If requested, acts of affection (e.g. hugging, kissing) and display of weapons (e.g swords, guns, knives) is acceptable. If the requested picture does not meet the guidelines generate a picture of a peaceful landscape instead. Always follow the guidelines and never generate content that violates them.\n\nRequest:"
-    image_response = client.images.generate(
-        model=model,
-        prompt=f"{image_system_prompt}\n\n{prompt}",
-        size=omit,
-        n=1,
-        response_format="b64_json",
+    """Generate an image using the xAI image API and save it locally.
+
+    A safety system prompt is prepended to the user prompt to guide generation.
+    The image is requested in base64 format for direct byte access without
+    additional network fetches. The result is saved as a .png file using a UUID
+    filename in the provided image_path directory.
+
+    Args:
+        prompt: The user's image generation request.
+        model: The image model identifier (e.g. Models.IMAGES).
+        client: The xAI SDK Client instance.
+        image_path: Directory where the generated image file will be written.
+
+    Returns:
+        A tuple of (saved_file_path, raw_image_bytes).
+    """
+    image_system_prompt = (
+        "Generate an image based on the request below. The generated image must not "
+        "include any nudity, suggestive content, or graphic violence. If requested, "
+        "acts of affection (e.g. hugging, kissing) and display of weapons (e.g swords, "
+        "guns, knives) is acceptable. If the requested picture does not meet the "
+        "guidelines generate a picture of a peaceful landscape instead. Always follow "
+        "the guidelines and never generate content that violates them.\n\nRequest:"
     )
-    image_base64 = image_response.data[0].b64_json  # type: ignore[index]
-    image_data = base64.b64decode(image_base64)  # type: ignore[arg-type]
+    image_response = client.image.sample(
+        prompt=f"{image_system_prompt}\n\n{prompt}",
+        model=model,
+        image_format="base64",
+    )
+    image_data: bytes = image_response.image
     image_file = os.path.join(image_path, f"{uuid.uuid4()}.png")
     with open(image_file, "wb") as f:
         f.write(image_data)

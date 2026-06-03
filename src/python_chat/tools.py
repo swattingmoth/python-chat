@@ -3,7 +3,11 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
+
 from attr import dataclass
+from xai_sdk.chat import tool as xai_tool
+
+from xai_sdk.proto import chat_pb2
 
 
 def today_date() -> str:
@@ -46,43 +50,55 @@ class Tools:
         """Initialize the tool registry."""
         self.tools: dict[str, dict[str, Any]] = {}
 
-    def register_tool(self, func: Callable[..., Any], description: str) -> None:
+    def register_tool(
+        self,
+        func: Callable[..., Any],
+        description: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> None:
         """Register a function as a tool that the model can call.
 
         Parameter types are derived from function annotations, and descriptions are derived from the function docstrings.
 
         Args:
             func (Callable): The function to register as a tool.
-            description (str): A brief description of what the tool does.
+            description (Optional[str]): A brief description of what the tool does.
+            name (Optional[str]): Optional override for the tool name (defaults to func.__name__).
         """
-        parameters = {}
+        tool_name = name or func.__name__
+        tool_desc = description or (func.__doc__ or "")
+
+        parameters: dict[str, Any] = {}
         sig = inspect.signature(func)
         for param_name, param in sig.parameters.items():
             parameters[param_name] = {
-                "type": get_property_type(param.annotation, True),
+                "type": get_property_type(param.annotation),
                 "description": get_description(func.__doc__, param_name),
             }
-        self.tools[func.__name__] = {
+
+        param_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": parameters,
+            "required": [
+                pname
+                for pname, p in sig.parameters.items()
+                if p.default is inspect.Parameter.empty
+                and p.kind
+                not in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                )
+            ],
+            "additionalProperties": False,
+        }
+
+        self.tools[tool_name] = {
             "function": func,
-            "json": {
-                "name": func.__name__,
-                "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": parameters,
-                },
-                "required": [
-                    name
-                    for name, param in sig.parameters.items()
-                    if param.default is inspect.Parameter.empty
-                    and param.kind
-                    not in (
-                        inspect.Parameter.VAR_POSITIONAL,
-                        inspect.Parameter.VAR_KEYWORD,
-                    )
-                ],
-                "additional_properties": False,
-            },
+            "tool": xai_tool(
+                name=tool_name,
+                description=tool_desc,
+                parameters=param_schema,
+            ),
         }
 
     def remove_tool(self, func: Callable[..., Any]) -> None:
@@ -91,12 +107,12 @@ class Tools:
             del self.tools[func.__name__]
 
     def handle_tool_calls(
-        self, message: SimpleNamespace
+        self, tool_calls: list[chat_pb2.ToolCall]
     ) -> tuple[list[dict[str, Any]], list[ToolResult | None]]:
         """Handles tool calls from the model by executing the corresponding functions and returning their results."""
         responses = []
         tool_results: list[ToolResult | None] = []
-        for tool_call in message.tool_calls:
+        for tool_call in tool_calls:
             print(f"Got tool call {tool_call}")
             func = self.tools.get(tool_call.function.name, {})
             if func:
@@ -136,35 +152,73 @@ class Tools:
         return responses, tool_results
 
     def get_tools_for_model(
-        self, additional_tools: Optional[list[dict[str, Any]]] = None
-    ) -> list[dict[str, Any]]:
-        """Return the tool metadata formatted for the model's tool interface."""
-        tools = [
-            {"type": "function", "function": self.tools[t]["json"]} for t in self.tools
-        ]
+        self, additional_tools: Optional[list[Any]] = None
+    ) -> list[Any]:
+        """Return the tool objects (xai chat tool protos) formatted for the model's tool interface.
+
+        Client-side tools are converted to xai_sdk.chat.tool(...) protos.
+        Server-side tools (e.g. web_search()) may be passed in via additional_tools.
+        """
+        tools: list[Any] = [self.tools[t]["tool"] for t in self.tools]
 
         if additional_tools:
             tools.extend(additional_tools)
         return tools
 
 
-def get_property_type(annotation: Any, for_xai: bool) -> str:
-    """Return the JSON property type name for a function annotation.
+def get_property_type(annotation: Any) -> str:
+    """Return the JSON Schema type name for a function annotation.
 
+    Maps Python types to JSON Schema primitive types:
+    str -> "string", int -> "integer", float -> "number",
+    bool -> "boolean", list[...] -> "array", dict[...] -> "object".
     Supports both concrete types and string annotations (from `from __future__ import annotations`).
     """
     if isinstance(annotation, str):
-        # Handle postponed annotations (string form)
-        if for_xai and annotation in {"str", "string"}:
-            return "string"
-        if annotation in {"int", "float", "bool", "list", "dict", "object"}:
-            return annotation
-        return annotation if annotation else "str"
+        mapping = {
+            "str": "string",
+            "int": "integer",
+            "float": "number",
+            "bool": "boolean",
+            "list": "array",
+            "dict": "object",
+            "object": "object",
+        }
+        return mapping.get(annotation, annotation or "string")
 
-    if for_xai:
-        if annotation == str or annotation == inspect.Parameter.empty:
-            return "string"
-    return annotation.__name__ if annotation != inspect.Parameter.empty else "str"
+    # concrete types or empty
+    if annotation in (str, inspect.Parameter.empty):
+        return "string"
+    if annotation is int:
+        return "integer"
+    if annotation is float:
+        return "number"
+    if annotation is bool:
+        return "boolean"
+    if annotation in (
+        list,
+        list[str],
+        list[int],
+        list[float],
+        list[bool],
+        list[dict[Any, Any]],
+        list[Any],
+    ):
+        return "array"
+    if annotation in (dict, dict[Any, Any], dict[str, Any], dict[str, str]):
+        return "object"
+
+    # fallback to __name__ for custom/annotated types
+    name = getattr(annotation, "__name__", None)
+    if name == "str":
+        return "string"
+    if name == "int":
+        return "integer"
+    if name == "float":
+        return "number"
+    if name == "bool":
+        return "boolean"
+    return name or "string"
 
 
 def get_description(docstring: Optional[str], param_name: str) -> str:

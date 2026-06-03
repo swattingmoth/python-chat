@@ -3,6 +3,8 @@
 Covers ToolResult dataclass, Tools registry, today_date, and the helper
 functions used for schema generation. All paths exercised with pure tests
 and mocks only where necessary for error simulation.
+
+Note: get_tools_for_model now returns xai_sdk.chat.tool protos (not OpenAI dict wrappers).
 """
 
 from __future__ import annotations
@@ -90,28 +92,29 @@ def test_tool_result_str_repr_with_image_bytes() -> None:
 
 
 @pytest.mark.parametrize(
-    ("annotation", "for_xai", "expected"),
+    ("annotation", "expected"),
     [
-        (str, True, "string"),
-        (int, True, "int"),
-        (str, False, "str"),
-        (float, False, "float"),
-        (type(None), True, "NoneType"),  # edge, though not typical
+        (str, "string"),
+        (int, "integer"),
+        (float, "number"),
+        (bool, "boolean"),
+        (list, "array"),
+        (dict, "object"),
+        ("str", "string"),
+        ("int", "integer"),
+        (type(None), "NoneType"),  # edge, though not typical
     ],
 )
-def test_get_property_type_maps_annotations(
-    annotation: Any, for_xai: bool, expected: str
-) -> None:
-    """get_property_type returns JSON schema type names, with xAI special case for str."""
-    assert get_property_type(annotation, for_xai) == expected
+def test_get_property_type_maps_annotations(annotation: Any, expected: str) -> None:
+    """get_property_type returns JSON Schema type names (string/integer/number/boolean/array/object)."""
+    assert get_property_type(annotation) == expected
 
 
 def test_get_property_type_empty_annotation_defaults() -> None:
-    """Empty annotation falls back appropriately."""
+    """Empty annotation falls back to string."""
     import inspect
 
-    assert get_property_type(inspect.Parameter.empty, True) == "string"
-    assert get_property_type(inspect.Parameter.empty, False) == "str"
+    assert get_property_type(inspect.Parameter.empty) == "string"
 
 
 @pytest.mark.parametrize(
@@ -141,7 +144,7 @@ def test_tools_init_starts_empty() -> None:
 
 
 def test_tools_register_tool_populates_registry_and_schema() -> None:
-    """register_tool stores func + builds OpenAI-compatible JSON schema from signature+docstring."""
+    """register_tool stores func + builds JSON schema (for xai tool protos) from signature+docstring."""
 
     def sample_tool(query: str, count: int = 5) -> str:
         """Search for things.
@@ -160,17 +163,17 @@ def test_tools_register_tool_populates_registry_and_schema() -> None:
     js = entry["json"]
     assert js["name"] == "sample_tool"
     assert js["description"] == "Performs a sample search"
-    # Note: current implementation places 'required' and 'additional_properties' at function schema level (not inside parameters)
+    # parameters schema now has proper JSON Schema types + additionalProperties inside parameters
     assert "query" in js["parameters"]["properties"]
     assert js["parameters"]["properties"]["query"]["type"] == "string"
     assert (
         js["parameters"]["properties"]["query"]["description"]
         == "the search query string"
     )
-    assert js["parameters"]["properties"]["count"]["type"] == "int"
-    assert "count" not in js["required"]  # has default
-    assert "query" in js["required"]
-    assert js["additional_properties"] is False
+    assert js["parameters"]["properties"]["count"]["type"] == "integer"
+    assert "count" not in js["parameters"]["required"]  # has default
+    assert "query" in js["parameters"]["required"]
+    assert js["parameters"]["additionalProperties"] is False
 
 
 def test_tools_register_tool_no_params() -> None:
@@ -184,7 +187,7 @@ def test_tools_register_tool_no_params() -> None:
     tools.register_tool(ping, "Health check")
     js = tools.tools["ping"]["json"]
     assert js["parameters"]["properties"] == {}
-    assert js["required"] == []
+    assert js["parameters"]["required"] == []
 
 
 def test_tools_remove_tool_removes_if_present() -> None:
@@ -202,8 +205,8 @@ def test_tools_remove_tool_removes_if_present() -> None:
     tools.remove_tool(dummy)
 
 
-def test_tools_get_tools_for_model_formats_for_openai() -> None:
-    """get_tools_for_model wraps each json under {'type': 'function', 'function': ...}."""
+def test_tools_get_tools_for_model_returns_xai_tool_protos() -> None:
+    """get_tools_for_model returns xai_sdk.chat.tool(...) protos (plus any additional server tools)."""
 
     def echo(msg: str) -> str:
         return msg
@@ -212,8 +215,10 @@ def test_tools_get_tools_for_model_formats_for_openai() -> None:
     tools.register_tool(echo, "echoes input")
     formatted = tools.get_tools_for_model()
     assert len(formatted) == 1
-    assert formatted[0]["type"] == "function"
-    assert formatted[0]["function"]["name"] == "echo"
+    # The returned objects are the xai tool protos; they expose .name
+    tool0 = formatted[0]
+    # xai tool proto nests the function definition; .function.name holds the tool name
+    assert getattr(getattr(tool0, "function", None), "name", None) == "echo"
 
 
 def test_tools_handle_tool_calls_executes_and_returns_responses() -> None:
@@ -234,7 +239,7 @@ def test_tools_handle_tool_calls_executes_and_returns_responses() -> None:
     tools.register_tool(add, "adds")
     tools.register_tool(returns_tool_result, "returns special")
 
-    # Build fake message like the one from OpenAI stream parsing
+    # Build fake message like the one from xai stream (post-collect tool_calls on response)
     msg = SimpleNamespace(
         tool_calls=[
             SimpleNamespace(
@@ -323,5 +328,8 @@ def test_tools_return_additional_tools() -> None:
 
     formatted = tools.get_tools_for_model(additional_tools=additional)
     assert len(formatted) == 2
-    assert formatted[0]["type"] == "function"
-    assert formatted[1]["type"] == "extra_tool"
+    # Client-side tools are returned as xai_sdk.chat.tool protos (not dicts)
+    assert hasattr(formatted[0], "function")
+    assert formatted[0].function.name == "dummy"
+    # Additional tools (e.g. server-side like web_search) are passed through as-is
+    assert formatted[1] == {"type": "extra_tool"}

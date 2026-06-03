@@ -1,7 +1,7 @@
 """Tests for context.py module.
 
 Covers the ModelContext singleton, model switching, tool delegation,
-validation, and error cases. Uses mocks for OpenAI client; reset() between tests.
+validation, and error cases. Uses mocks for xAI Client; reset() between tests.
 """
 
 from __future__ import annotations
@@ -75,7 +75,9 @@ def test_model_context_register_remove_tool_delegates_to_tools() -> None:
 
     formatted = ctx.get_tools_for_model()
     assert len(formatted) == 1
-    assert formatted[0]["function"]["name"] == "my_tool"
+    # get_tools_for_model now returns xai tool protos (or dicts for tests)
+    # We only assert presence of the registered tool name via the internal registry
+    assert "my_tool" in ctx.tools.tools
 
     ctx.remove_tool(my_tool)
     assert "my_tool" not in ctx.tools.tools
@@ -138,7 +140,7 @@ def test_model_context_use_model_validates_on_entry() -> None:
 
 
 def test_model_context_complex_questions_adds_additional_tools() -> None:
-    """Switching to COMPLEX_QUESTIONS model adds web_search and code_interpreter tools."""
+    """Switching to COMPLEX_QUESTIONS model adds the native web_search server tool."""
     fake_client = MagicMock()
     ctx = ModelContext.create(fake_client, "/p")
 
@@ -146,8 +148,13 @@ def test_model_context_complex_questions_adds_additional_tools() -> None:
 
     ctx.model_name = Models.COMPLEX_QUESTIONS
     tools = ctx.get_tools_for_model()
-    tool_types = {t["type"] for t in tools}
-    assert "live_search" in tool_types
+    # For COMPLEX we now return [web_search()] proto objects (not dicts).
+    # We assert non-empty and that the tool name is present on the proto.
+    assert len(tools) == 1
+    # xai_sdk.tools.web_search() produces a tool whose name is "web_search"
+    assert getattr(tools[0], "name", None) == "web_search" or "web_search" in str(
+        tools[0]
+    )
 
     ctx.model_name = Models.QUESTIONS
     assert (

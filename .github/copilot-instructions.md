@@ -3,7 +3,7 @@
 This file provides persistent guidance for GitHub Copilot (and other AI coding assistants) when working in this repository.
 
 ## Project Overview
-- **Purpose**: Python package skeleton (`python-chat`) for a production-grade LLM chatbot.
+- **Purpose**: Production-grade LLM chatbot package (`python-chat`) using native xai-sdk (chat + tools + images), Gradio UI, strict typing and tests. (Originally started as skeleton.)
 - **Deployment target**: Gradio-based web application, to be hosted on Supabase
 - **Package name**: `python_chat` (importable as `from python_chat import ...`)
 - **Python**: >= 3.13

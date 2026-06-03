@@ -7,14 +7,12 @@ additionally depends on the ModelContext singleton.
 
 from __future__ import annotations
 
-import base64
 from types import SimpleNamespace
 from typing import Generator
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from python_chat import images as images_mod
 from python_chat.api import Models
 from python_chat.context import ModelContext
 from python_chat.images import generate_image, generate_image_tool
@@ -26,11 +24,12 @@ def reset_and_setup_context() -> Generator[None, None, None]:
     """Provide a fully mocked ModelContext for image tool tests."""
     ModelContext.reset()
     fake_client = MagicMock()
-    # The image gen response shape expected by code
-    fake_b64 = base64.b64encode(b"fake-png-bytes-here").decode()
-    fake_resp = MagicMock()
-    fake_resp.data = [SimpleNamespace(b64_json=fake_b64)]
-    fake_client.images.generate.return_value = fake_resp
+    # The image gen response shape expected by new xai code: .image -> bytes directly
+    # (the autouse fixture client is not actually invoked for image.sample in tool tests
+    # because they patch generate_image; this just satisfies ModelContext.create)
+    fake_client.image.sample.return_value = SimpleNamespace(
+        image=b"fake-png-bytes-here"
+    )
 
     ctx = ModelContext.create(fake_client, "/tmp/test-images")
     # ensure model starts as QUESTIONS but tool will switch
@@ -39,12 +38,9 @@ def reset_and_setup_context() -> Generator[None, None, None]:
 
 
 def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
-    """Core happy path: builds prompt, calls client, decodes, writes uuid.png, returns tuple."""
+    """Core happy path: builds prompt, calls client.image.sample, gets .image bytes, writes uuid.png, returns tuple."""
     fake_client = MagicMock()
-    fake_b64 = base64.b64encode(b"\x89PNG...").decode()
-    fake_resp = MagicMock()
-    fake_resp.data = [SimpleNamespace(b64_json=fake_b64)]
-    fake_client.images.generate.return_value = fake_resp
+    fake_client.image.sample.return_value = SimpleNamespace(image=b"\x89PNG...")
 
     with (
         patch("python_chat.images.uuid.uuid4") as mock_uuid,
@@ -63,11 +59,11 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
         )
 
         # API called with wrapped system prompt + user prompt
-        call_kwargs = fake_client.images.generate.call_args.kwargs
+        call_kwargs = fake_client.image.sample.call_args.kwargs
         assert "Generate an image based on the request" in call_kwargs["prompt"]
         assert "a cat in hat" in call_kwargs["prompt"]
         assert call_kwargs["model"] == Models.IMAGES
-        assert call_kwargs["response_format"] == "b64_json"
+        assert call_kwargs["image_format"] == "base64"
 
         mock_join.assert_called_once()
         mock_file.assert_called_once_with("/tmp/test-images/fake.png", "wb")
