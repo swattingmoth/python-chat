@@ -123,7 +123,7 @@ class ModelContext:
 
     def handle_tool_calls(
         self, tool_calls: list[chat_pb2.ToolCall]
-    ) -> tuple[list[dict[str, Any]], list[ToolResult | None]]:
+    ) -> list[ToolResult]:
         """Execute tool calls requested by the model and return their responses."""
         return self._tools.handle_tool_calls(tool_calls)
 

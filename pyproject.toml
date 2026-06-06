@@ -25,6 +25,7 @@ dev = [
     "pytest>=8.3.0",
     "mypy>=1.13.0",
     "pytest-cov>=7.1.0",
+    "types-protobuf>=7.34.1.20260518",
 ]
 
 [tool.pytest.ini_options]

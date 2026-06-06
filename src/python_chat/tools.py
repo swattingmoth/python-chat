@@ -1,6 +1,7 @@
 import inspect
 import json
 from datetime import datetime
+from json import tool
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
@@ -19,6 +20,7 @@ def today_date() -> str:
 class ToolResult:
     content_for_model: str
     content: Any
+    tool_call_id: str
     content_type: str = "text"
 
     def __str__(self) -> str:
@@ -29,6 +31,7 @@ class ToolResult:
         return (
             f"ToolResult:\n"
             f"  Model Content: {self.content_for_model}\n"
+            f"  Tool Call ID: {self.tool_call_id}\n"
             f"  Type: {self.content_type}\n"
             f"  Content Preview: {truncated}"
         )
@@ -40,6 +43,7 @@ class ToolResult:
 
         return (
             f"ToolResult(content_for_model={self.content_for_model!r}, "
+            f"tool_call_id={self.tool_call_id!r}, "
             f"content_type={self.content_type!r}, "
             f"content_preview={truncated!r})"
         )
@@ -69,12 +73,16 @@ class Tools:
         tool_desc = description or (func.__doc__ or "")
 
         parameters: dict[str, Any] = {}
+        accept_tool_call_id = False
         sig = inspect.signature(func)
         for param_name, param in sig.parameters.items():
-            parameters[param_name] = {
-                "type": get_property_type(param.annotation),
-                "description": get_description(func.__doc__, param_name),
-            }
+            if param_name == "tool_call_id":
+                accept_tool_call_id = True
+            else:
+                parameters[param_name] = {
+                    "type": get_property_type(param.annotation),
+                    "description": get_description(func.__doc__, param_name),
+                }
 
         param_schema: dict[str, Any] = {
             "type": "object",
@@ -94,6 +102,7 @@ class Tools:
 
         self.tools[tool_name] = {
             "function": func,
+            "accept_tool_call_id": accept_tool_call_id,
             "tool": xai_tool(
                 name=tool_name,
                 description=tool_desc,
@@ -108,10 +117,9 @@ class Tools:
 
     def handle_tool_calls(
         self, tool_calls: list[chat_pb2.ToolCall]
-    ) -> tuple[list[dict[str, Any]], list[ToolResult | None]]:
+    ) -> list[ToolResult]:
         """Handles tool calls from the model by executing the corresponding functions and returning their results."""
-        responses = []
-        tool_results: list[ToolResult | None] = []
+        tool_results: list[ToolResult] = []
         for tool_call in tool_calls:
             print(f"Got tool call {tool_call}")
             func = self.tools.get(tool_call.function.name, {})
@@ -121,35 +129,31 @@ class Tools:
                     print(
                         f"Calling function {func['function']} with arguments {arguments}"
                     )
+                    if func["accept_tool_call_id"]:
+                        arguments["tool_call_id"] = tool_call.id
                     result = func["function"](**arguments)
                     print(f"Got result {result} from tool call")
 
-                    result_for_model = result
                     if isinstance(result, ToolResult):
-                        result_for_model = result.content_for_model
                         tool_results.append(result)
                     else:
-                        tool_results.append(None)
+                        tool_results.append(
+                            ToolResult(str(result), result, tool_call.id, "text")
+                        )
 
-                    responses.append(
-                        {
-                            "role": "tool",
-                            "content": result_for_model or "",
-                            "tool_call_id": tool_call.id,
-                        }
-                    )
                 except Exception as e:
                     print(f"Error executing tool {tool_call.function.name}: {e}")
                     arguments = {}
-                    responses.append(
-                        {
-                            "role": "tool",
-                            "content": f"Error executing tool {tool_call.function.name}",
-                            "tool_call_id": tool_call.id,
-                        }
+                    tool_results.append(
+                        ToolResult(
+                            f"Error executing tool {tool_call.function.name}",
+                            None,
+                            tool_call.id,
+                            "text",
+                        )
                     )
 
-        return responses, tool_results
+        return tool_results
 
     def get_tools_for_model(
         self, additional_tools: Optional[list[Any]] = None

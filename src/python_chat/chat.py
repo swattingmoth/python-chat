@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from http import client
 import io
+from json import tool
 from types import SimpleNamespace
 from typing import Any, Callable, Generator, Optional, TYPE_CHECKING, Sequence
 
@@ -38,9 +39,7 @@ The first item in each yielded tuple is the (partial or final) Response object;
 the second is the incremental Chunk. Tool calls appear on the final Response.
 """
 
-ToolHandler = Callable[
-    [list[chat_pb2.ToolCall]], tuple[list[dict[str, Any]], list[ToolResult | None]]
-]
+ToolHandler = Callable[[list[chat_pb2.ToolCall]], list[ToolResult]]
 
 
 def get_model_for_choice(choice: str) -> str:
@@ -82,76 +81,91 @@ def get_system_message_for_choice(choice: str) -> str:
     return SYSTEM_MESSAGE
 
 
-def _to_xai_message(msg: dict[str, Any]) -> Any:
-    """Convert internal chat history dict into an xai_sdk chat message.
+# def _to_xai_message(msg: dict[str, Any]) -> Any:
+#     """Convert internal chat history dict into an xai_sdk chat message.
 
-    Handles system/user/tool_result and assistant messages.
-    For assistant messages carrying prior tool_calls (to continue a tool loop),
-    we construct a low-level chat_pb2.Message so that tool_calls are attached.
-    """
-    role = msg.get("role")
-    content: str = msg.get("content") or ""
+#     Handles system/user/tool_result and assistant messages.
+#     For assistant messages carrying prior tool_calls (to continue a tool loop),
+#     we construct a low-level chat_pb2.Message so that tool_calls are attached.
+#     """
+#     role = msg.get("role")
+#     content: str = msg.get("content") or ""
 
-    if role == "system":
-        return system(content)
-    if role == "user":
-        return user(content)
-    if role == "tool":
-        tool_call_id: str = msg.get("tool_call_id", "")
-        return tool_result(tool_call_id=tool_call_id, result=content or "")
-    if role == "assistant":
-        assistant_msg = assistant(content)
-        tool_calls = msg.get("tool_calls")
-        if tool_calls:
-            for tc in tool_calls:
-                if isinstance(tc, dict):
-                    fid = tc.get("id", "")
-                    fn = tc.get("function", {}) or {}
-                    fname = fn.get("name", "") if isinstance(fn, dict) else ""
-                    fargs = fn.get("arguments", "") if isinstance(fn, dict) else ""
-                else:
-                    fid = getattr(tc, "id", "")
-                    fn = getattr(tc, "function", None)
-                    fname = getattr(fn, "name", "") if fn else ""
-                    fargs = getattr(fn, "arguments", "") if fn else ""
-                assistant_msg.tool_calls.append(
-                    chat_pb2.ToolCall(
-                        id=fid,
-                        function=chat_pb2.FunctionCall(name=fname, arguments=fargs),
-                    )
-                )
-    # Fallback
-    return user(str(content))
+#     if role == "system":
+#         return system(content)
+#     if role == "user":
+#         return user(content)
+#     if role == "tool":
+#         tool_call_id: str = msg.get("tool_call_id", "")
+#         return tool_result(tool_call_id=tool_call_id, result=content or "")
+#     if role == "assistant":
+#         assistant_msg = assistant(content)
+#         tool_calls = msg.get("tool_calls")
+#         if tool_calls:
+#             for tc in tool_calls:
+#                 if isinstance(tc, dict):
+#                     fid = tc.get("id", "")
+#                     fn = tc.get("function", {}) or {}
+#                     fname = fn.get("name", "") if isinstance(fn, dict) else ""
+#                     fargs = fn.get("arguments", "") if isinstance(fn, dict) else ""
+#                 else:
+#                     fid = getattr(tc, "id", "")
+#                     fn = getattr(tc, "function", None)
+#                     fname = getattr(fn, "name", "") if fn else ""
+#                     fargs = getattr(fn, "arguments", "") if fn else ""
+#                 assistant_msg.tool_calls.append(
+#                     chat_pb2.ToolCall(
+#                         id=fid,
+#                         function=chat_pb2.FunctionCall(name=fname, arguments=fargs),
+#                     )
+#                 )
+#     # Fallback
+#     return user(str(content))
 
 
-def _normalize_tool_call(tc: Any) -> SimpleNamespace:
-    """Normalize an xai tool call (proto, dict, or ns) to the SimpleNamespace shape
-    expected by ToolHandler ( {id, function: {name, arguments}} ).
-    """
-    if isinstance(tc, SimpleNamespace):
-        return tc
-    if isinstance(tc, dict):
-        fid = tc.get("id", "")
-        fn = tc.get("function", {}) or {}
-        fname = fn.get("name", "") if isinstance(fn, dict) else getattr(fn, "name", "")
-        fargs = (
-            fn.get("arguments", "")
-            if isinstance(fn, dict)
-            else getattr(fn, "arguments", "")
-        )
-        return SimpleNamespace(
-            id=fid,
-            function=SimpleNamespace(name=fname, arguments=fargs),
-        )
-    # assume protobuf / object with attributes
-    fid = getattr(tc, "id", "") or ""
-    fn = getattr(tc, "function", None)
-    fname = getattr(fn, "name", "") if fn is not None else ""
-    fargs = getattr(fn, "arguments", "") if fn is not None else ""
-    return SimpleNamespace(
-        id=fid,
-        function=SimpleNamespace(name=fname, arguments=fargs),
-    )
+# def _normalize_tool_call(tc: Any) -> SimpleNamespace:
+#     """Normalize an xai tool call (proto, dict, or ns) to the SimpleNamespace shape
+#     expected by ToolHandler ( {id, function: {name, arguments}} ).
+#     """
+#     if isinstance(tc, SimpleNamespace):
+#         return tc
+#     if isinstance(tc, dict):
+#         fid = tc.get("id", "")
+#         fn = tc.get("function", {}) or {}
+#         fname = fn.get("name", "") if isinstance(fn, dict) else getattr(fn, "name", "")
+#         fargs = (
+#             fn.get("arguments", "")
+#             if isinstance(fn, dict)
+#             else getattr(fn, "arguments", "")
+#         )
+#         return SimpleNamespace(
+#             id=fid,
+#             function=SimpleNamespace(name=fname, arguments=fargs),
+#         )
+#     # assume protobuf / object with attributes
+#     fid = getattr(tc, "id", "") or ""
+#     fn = getattr(tc, "function", None)
+#     fname = getattr(fn, "name", "") if fn is not None else ""
+#     fargs = getattr(fn, "arguments", "") if fn is not None else ""
+#     return SimpleNamespace(
+#         id=fid,
+#         function=SimpleNamespace(name=fname, arguments=fargs),
+#     )
+
+ROLE_MAP: dict[chat_pb2.MessageRole, str] = {
+    chat_pb2.MessageRole.ROLE_ASSISTANT: "assistant",
+    chat_pb2.MessageRole.ROLE_USER: "user",
+    chat_pb2.MessageRole.ROLE_SYSTEM: "system",
+    chat_pb2.MessageRole.ROLE_TOOL: "tool",
+}
+
+
+def message_to_dict(msg: chat_pb2.Message) -> dict[str, Any]:
+    """Convert a chat_pb2.Message into a dict for UI consumption."""
+    role = ROLE_MAP.get(msg.role, "unknown")
+    content = msg.content or ""
+
+    return {"role": role, "content": content}
 
 
 class ChatInterface:
@@ -203,7 +217,7 @@ class ChatInterface:
 
     def _default_tool_handler(
         self, message: list[chat_pb2.ToolCall]
-    ) -> tuple[list[dict[str, Any]], list[ToolResult | None]]:
+    ) -> list[ToolResult]:
         """Default tool execution using the model context's registered tools."""
         return self.modelContext.handle_tool_calls(message)
 
@@ -227,7 +241,7 @@ class ChatInterface:
         # Add user message to history
         self.chat_history.append(user(message))
         local_chat_history = [
-            json_format.MessageToJson(c) for c in self.chat_history
+            message_to_dict(c) for c in self.chat_history
         ]  # Create a local copy for this interaction
         yield local_chat_history + [
             {
@@ -259,11 +273,13 @@ class ChatInterface:
 
                 # Stream tokens; after completion, inspect final response for tool_calls
                 client_tool_calls: list[chat_pb2.ToolCall] = []
+                last_response: Optional[Response] = None
                 for response, chunk in stream:
+                    last_response = response
                     token = getattr(chunk, "content", None)
                     if token:
                         yield local_chat_history + [
-                            {"role": "assistnant", "content": response.content}
+                            {"role": "assistant", "content": response.content}
                         ], self.image
 
                     for tool_call in chunk.tool_calls:
@@ -280,84 +296,53 @@ class ChatInterface:
                             }
                         ], self.image
 
-                #     for tool_call in client_tool_calls
-                # # Determine client-side tool calls only (filter server tools)
-                # tool_calls_for_history: list[dict[str, Any]] | None = None
-                # if last_response is not None:
-                #     raw_tcs = getattr(last_response, "tool_calls", None) or []
-                #     for tc in raw_tcs:
-                #         try:
-                #             if get_tool_call_type(tc) != "client_side_tool":
-                #                 continue
-                #         except Exception:
-                #             # In tests or older objects without get_tool_call_type, include
-                #             pass
-                #         client_tool_calls.append(_normalize_tool_call(tc))
+                # Append this turn's assistant text (if any) to history
+                if last_response:
+                    assistant_message = assistant(last_response.content)
+                    assistant_message.tool_calls.extend(last_response.tool_calls)
+                    self.chat_history.append(assistant_message)
 
-                #     if client_tool_calls:
-                #         tool_calls_for_history = []
-                #         for tc_ns in client_tool_calls:
-                #             tool_calls_for_history.append(
-                #                 {
-                #                     "id": tc_ns.id,
-                #                     "type": "function",
-                #                     "function": {
-                #                         "name": tc_ns.function.name,
-                #                         "arguments": tc_ns.function.arguments,
-                #                     },
-                #                 }
-                #             )
+                    local_chat_history.append(
+                        {
+                            "role": "assistant",
+                            "content": last_response.content or "",
+                        }
+                    )
 
-                # Execute client tools (if any) and collect their responses
-                tool_responses: list[dict[str, Any]] = []
-                tool_results: list[ToolResult | None] = []
                 if client_tool_calls:
-                    tool_responses, tool_results = self._tool_handler(client_tool_calls)
+                    tool_results = self._tool_handler(client_tool_calls)
 
-                    # Side-effect: capture image ToolResult for "Generate Image" mode
-                    if is_image_mode:
-                        for tr in tool_results:
+                    for tr in tool_results:
+                        if is_image_mode:
+                            # Side-effect: capture image ToolResult for "Generate Image" mode
                             if tr and tr.content_type == "image" and tr.content:
                                 try:
                                     self.image = Image.open(io.BytesIO(tr.content))
                                 except Exception:
                                     pass
-                        # Yield so the UI can display the image promptly
-                        yield local_chat_history + [
-                            {"role": "assistant", "content": full_response or ""}
-                        ], self.image
+                            # Yield so the UI can display the image promptly
+                            yield local_chat_history + [
+                                {
+                                    "role": "assistant",
+                                    "content": (
+                                        last_response.content if last_response else ""
+                                    ),
+                                }
+                            ], self.image
 
-                # Append this turn's assistant text (if any) to history
-                if full_response:
-                    history_entry = {
-                        "role": "assistant",
-                        "content": full_response or "",
-                    }
-                    self.chat_history.append(history_entry)
-                    local_chat_history.append(history_entry)
+                        self.chat_history.append(
+                            tool_result(
+                                tr.content_for_model, tool_call_id=tr.tool_call_id
+                            )
+                        )
 
-                if tool_calls_for_history:
-                    # Record the assistant turn that requested the tool calls
-                    assistant_message = {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": tool_calls_for_history,
-                    }
-                    self.chat_history.append(assistant_message)
-                    local_chat_history.append(assistant_message)
-
-                if tool_responses:
-                    # Record the tool results; loop to let model continue if needed
-                    self.chat_history.extend(tool_responses)
-                    local_chat_history.extend(tool_responses)
                     if is_image_mode and self.image:
                         # ensure we stop after one image generation per user turn
                         self._print_chat()
                         break
-                    continue
-
-                self._print_chat()
-                break
+                else:
+                    self._print_chat()
+                    break
 
         except Exception as e:
             print(f"Error in chat: {e}")
@@ -366,7 +351,7 @@ class ChatInterface:
                 "I encountered an error processing your request. Please try again."
             )
             self.chat_history.append(assistant(error_msg))
-            yield [json_format.MessageToJson(m) for m in self.chat_history], self.image
+            yield [message_to_dict(m) for m in self.chat_history], self.image
 
     def _print_chat(self) -> None:
         print("*********** Finished a chat iteration ***********")
