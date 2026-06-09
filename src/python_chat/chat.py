@@ -163,7 +163,7 @@ ROLE_MAP: dict[chat_pb2.MessageRole, str] = {
 def message_to_dict(msg: chat_pb2.Message) -> dict[str, Any]:
     """Convert a chat_pb2.Message into a dict for UI consumption."""
     role = ROLE_MAP.get(msg.role, "unknown")
-    content = msg.content or ""
+    content = "\n".join([c.text or "" for c in msg.content or ""])  # type: ignore
 
     return {"role": role, "content": content}
 
@@ -356,7 +356,7 @@ class ChatInterface:
     def _print_chat(self) -> None:
         print("*********** Finished a chat iteration ***********")
         for entry in self.chat_history:
-            print(entry)
+            print(message_to_dict(entry))
         print("**********************************************")
 
     def clear_history(self) -> list[dict[str, Any]]:
