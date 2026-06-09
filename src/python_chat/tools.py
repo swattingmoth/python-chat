@@ -1,3 +1,5 @@
+from collections import defaultdict
+from email.policy import default
 import inspect
 import json
 from datetime import datetime
@@ -59,6 +61,7 @@ class Tools:
         func: Callable[..., Any],
         description: Optional[str] = None,
         name: Optional[str] = None,
+        max_turns: Optional[int] = None,
     ) -> None:
         """Register a function as a tool that the model can call.
 
@@ -68,6 +71,7 @@ class Tools:
             func (Callable): The function to register as a tool.
             description (Optional[str]): A brief description of what the tool does.
             name (Optional[str]): Optional override for the tool name (defaults to func.__name__).
+            max_turns (Optional[int]): The maximum number of turns the tool can be used in a single handle_tool_calls session
         """
         tool_name = name or func.__name__
         tool_desc = description or (func.__doc__ or "")
@@ -103,6 +107,7 @@ class Tools:
         self.tools[tool_name] = {
             "function": func,
             "accept_tool_call_id": accept_tool_call_id,
+            "max_turns": max_turns,
             "tool": xai_tool(
                 name=tool_name,
                 description=tool_desc,
@@ -120,10 +125,21 @@ class Tools:
     ) -> list[ToolResult]:
         """Handles tool calls from the model by executing the corresponding functions and returning their results."""
         tool_results: list[ToolResult] = []
+        tool_call_counts: dict[str, int] = defaultdict(int)
         for tool_call in tool_calls:
             print(f"Got tool call {tool_call}")
+            # check if tool call count for this tool exceeds max_turns
+
             func = self.tools.get(tool_call.function.name, {})
             if func:
+                max_turns = func.get("max_turns")
+                if max_turns and tool_call_counts[tool_call.function.name] >= max_turns:
+                    print(
+                        f"Skipping tool call {tool_call}. Already called {tool_call_counts[tool_call.function.name]} time(s)."
+                    )
+                    continue
+                tool_call_counts[tool_call.function.name] += 1
+
                 try:
                     arguments = json.loads(tool_call.function.arguments)
                     print(

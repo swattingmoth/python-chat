@@ -107,6 +107,7 @@ class ModelContext:
         func: Callable[..., Any],
         description: Optional[str] = None,
         name: Optional[str] = None,
+        max_turns: Optional[int] = None,
     ) -> None:
         """Register a callable as a tool for the LLM to use.
 
@@ -114,8 +115,11 @@ class ModelContext:
             func: The function to register.
             description: Optional description (falls back to docstring).
             name: Optional name override (defaults to func.__name__).
+            max_turns: Optional maximum number of times the tool can be called.
         """
-        self._tools.register_tool(func, description=description, name=name)
+        self._tools.register_tool(
+            func, description=description, name=name, max_turns=max_turns
+        )
 
     def remove_tool(self, func: Callable[..., Any]) -> None:
         """Remove a registered tool from the tool registry."""

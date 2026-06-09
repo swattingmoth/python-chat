@@ -40,7 +40,9 @@ def launch_app() -> gr.Blocks:
             """Update image visibility based on choice."""
             if selected_choice == "Generate Image":
                 ModelContext.current().register_tool(
-                    generate_image_tool, "Generate an image based on a text prompt"
+                    generate_image_tool,
+                    "Generate an image based on a text prompt",
+                    max_turns=1,
                 )
             else:
                 ModelContext.current().remove_tool(generate_image_tool)
