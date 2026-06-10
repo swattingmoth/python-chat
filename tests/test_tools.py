@@ -9,6 +9,7 @@ Note: get_tools_for_model now returns xai_sdk.chat.tool protos (not OpenAI dict 
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +24,7 @@ from python_chat.tools import (
     get_property_type,
     today_date,
 )
+from xai_sdk.proto import chat_pb2
 
 # --- Tests for today_date ---
 
@@ -56,6 +58,7 @@ def test_tool_result_str_and_repr_truncate_long_content(
         content_for_model="model sees this",
         content=content,
         content_type="text",
+        tool_call_id="tool_1",
     )
 
     s = str(tr)
@@ -78,6 +81,7 @@ def test_tool_result_str_repr_with_image_bytes() -> None:
         content_for_model="image generated",
         content=b"\x89PNG\r\n" + b"x" * 200,
         content_type="image",
+        tool_call_id="tool_1",
     )
     s = str(tr)
     r = repr(tr)
@@ -160,20 +164,18 @@ def test_tools_register_tool_populates_registry_and_schema() -> None:
     assert "sample_tool" in tools.tools
     entry = tools.tools["sample_tool"]
     assert entry["function"] is sample_tool
-    js = entry["json"]
-    assert js["name"] == "sample_tool"
-    assert js["description"] == "Performs a sample search"
-    # parameters schema now has proper JSON Schema types + additionalProperties inside parameters
-    assert "query" in js["parameters"]["properties"]
-    assert js["parameters"]["properties"]["query"]["type"] == "string"
-    assert (
-        js["parameters"]["properties"]["query"]["description"]
-        == "the search query string"
-    )
-    assert js["parameters"]["properties"]["count"]["type"] == "integer"
-    assert "count" not in js["parameters"]["required"]  # has default
-    assert "query" in js["parameters"]["required"]
-    assert js["parameters"]["additionalProperties"] is False
+    tool_proto = entry["tool"]
+    assert tool_proto.function.name == "sample_tool"
+    assert tool_proto.function.description == "Performs a sample search"
+
+    params = json.loads(tool_proto.function.parameters)
+    assert "query" in params["properties"]
+    assert params["properties"]["query"]["type"] == "string"
+    assert params["properties"]["query"]["description"] == "the search query string"
+    assert params["properties"]["count"]["type"] == "integer"
+    assert "count" not in params["required"]
+    assert "query" in params["required"]
+    assert params["additionalProperties"] is False
 
 
 def test_tools_register_tool_no_params() -> None:
@@ -185,9 +187,10 @@ def test_tools_register_tool_no_params() -> None:
 
     tools = Tools()
     tools.register_tool(ping, "Health check")
-    js = tools.tools["ping"]["json"]
-    assert js["parameters"]["properties"] == {}
-    assert js["parameters"]["required"] == []
+    tool_proto = tools.tools["ping"]["tool"]
+    params = json.loads(tool_proto.function.parameters)
+    assert params["properties"] == {}
+    assert params["required"] == []
 
 
 def test_tools_remove_tool_removes_if_present() -> None:
@@ -233,42 +236,82 @@ def test_tools_handle_tool_calls_executes_and_returns_responses() -> None:
         return a + b
 
     def returns_tool_result(x: str) -> ToolResult:
-        return ToolResult(content_for_model="special", content=x, content_type="text")
+        return ToolResult(
+            content_for_model="special",
+            content=x,
+            content_type="text",
+            tool_call_id="call_2",
+        )
 
     tools = Tools()
     tools.register_tool(add, "adds")
     tools.register_tool(returns_tool_result, "returns special")
 
     # Build fake message like the one from xai stream (post-collect tool_calls on response)
-    msg = SimpleNamespace(
-        tool_calls=[
-            SimpleNamespace(
-                id="call_1",
-                function=SimpleNamespace(name="add", arguments='{"a": 2, "b": 3}'),
+    tool_calls = [
+        chat_pb2.ToolCall(
+            id="call_1",
+            function=chat_pb2.FunctionCall(
+                name="add",
+                arguments='{"a": 2, "b": 3}',
             ),
-            SimpleNamespace(
-                id="call_2",
-                function=SimpleNamespace(
-                    name="returns_tool_result", arguments='{"x": "hi"}'
-                ),
+        ),
+        chat_pb2.ToolCall(
+            id="call_2",
+            function=chat_pb2.FunctionCall(
+                name="returns_tool_result",
+                arguments='{"x": "hi"}',
             ),
-        ]
-    )
+        ),
+    ]
 
-    responses, results = tools.handle_tool_calls(msg)
-
-    assert len(responses) == 2
-    assert responses[0]["role"] == "tool"
-    assert responses[0]["tool_call_id"] == "call_1"
-    assert (
-        responses[0]["content"] == 5
-    )  # from add (raw return value, not stringified by current impl)
-    assert responses[1]["content"] == "special"
+    results = tools.handle_tool_calls(tool_calls)
 
     assert len(results) == 2
-    assert results[0] is None  # plain int return
+    assert results[0].tool_call_id == "call_1"
+    assert results[0].content_for_model == "5"
+    assert results[0].content == 5
+    assert results[0].content_type == "text"
+
     assert isinstance(results[1], ToolResult)
     assert results[1].content == "hi"
+    assert results[1].tool_call_id == "call_2"
+
+
+def test_tools_handle_tool_calls_honors_max_turns() -> None:
+    """Ensure that when a tool call is registered with max_turns, it is only called that many times."""
+
+    tool_function = MagicMock(return_value="ok")
+
+    tools = Tools()
+    tools.register_tool(tool_function, name="tool_function", max_turns=1)
+
+    # Build fake message like the one from xai stream (post-collect tool_calls on response)
+    tool_calls = [
+        chat_pb2.ToolCall(
+            id="call_1",
+            function=chat_pb2.FunctionCall(
+                name="tool_function",
+                arguments="{}",
+            ),
+        ),
+        chat_pb2.ToolCall(
+            id="call_2",
+            function=chat_pb2.FunctionCall(
+                name="tool_function",
+                arguments="{}",
+            ),
+        ),
+    ]
+
+    results = tools.handle_tool_calls(tool_calls)
+
+    assert tool_function.call_count == 1
+    assert len(results) == 1
+    assert results[0].tool_call_id == "call_1"
+    assert results[0].content_for_model == "ok"
+    assert results[0].content == "ok"
+    assert results[0].content_type == "text"
 
 
 def test_tools_handle_tool_calls_handles_missing_tool_and_exceptions() -> None:
@@ -280,36 +323,29 @@ def test_tools_handle_tool_calls_handles_missing_tool_and_exceptions() -> None:
     tools = Tools()
     tools.register_tool(boom, "will fail")
 
-    msg = SimpleNamespace(
-        tool_calls=[
-            SimpleNamespace(
-                id="call_bad",
-                function=SimpleNamespace(name="boom", arguments='{"x": "1"}'),
-            ),
-            SimpleNamespace(
-                id="call_unknown",
-                function=SimpleNamespace(name="ghost", arguments="{}"),
-            ),
-        ]
-    )
+    tool_calls = [
+        chat_pb2.ToolCall(
+            id="call_bad",
+            function=chat_pb2.FunctionCall(name="boom", arguments='{"x": "1"}'),
+        ),
+        chat_pb2.ToolCall(
+            id="call_unknown",
+            function=chat_pb2.FunctionCall(name="ghost", arguments="{}"),
+        ),
+    ]
 
-    # Patch print to avoid noise, but still execute
     with patch("python_chat.tools.print"):
-        responses, results = tools.handle_tool_calls(msg)
+        results = tools.handle_tool_calls(tool_calls)
 
-    # For boom: error response (except path appends to responses but NOT to tool_results)
-    # For unknown: {} falsy so skipped, no appends
-    assert len(responses) == 1
-    assert "Error executing tool boom" in responses[0]["content"]
-    assert results == []
+    assert len(results) == 1
+    assert "Error executing tool boom" in results[0].content_for_model
+    assert results[0].content is None
 
 
 def test_tools_handle_tool_calls_with_no_tool_calls() -> None:
-    """Empty tool_calls list returns empty lists."""
+    """Empty tool_calls list returns empty list."""
     tools = Tools()
-    msg = SimpleNamespace(tool_calls=[])
-    responses, results = tools.handle_tool_calls(msg)
-    assert responses == []
+    results = tools.handle_tool_calls([])
     assert results == []
 
 

@@ -6,10 +6,12 @@ for high coverage without real API calls or side effects.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, Callable, Generator
 from unittest.mock import MagicMock
+from xai_sdk.chat import user
 
 import pytest
 from PIL import Image as PILImage
@@ -21,33 +23,64 @@ from python_chat.chat import (
     ToolHandler,
     get_model_for_choice,
     get_system_message_for_choice,
+    message_to_dict,
 )
 from python_chat.tools import ToolResult
+from xai_sdk.proto import chat_pb2
 
 # --- Helpers for realistic fake streams (xai-sdk style) ---
-# The chat() loop now consumes Generator[tuple[response, chunk], ...] directly.
-# Tool calls are provided on the *final* response object (no delta accumulation in our code).
-# We use SimpleNamespace to simulate the minimal attrs accessed: chunk.content, response.tool_calls
+# The chat() loop consumes Generator[tuple[Response, Chunk], ...] directly.
+# Both response and chunk must expose .content (for token yields + final append) and
+# .tool_calls (code collects client tools from chunks; extends from last_response).
+# Use SimpleNamespace to simulate without importing heavy xai runtime types in tests.
 
 
-def _make_chunk(content: str | None = None) -> Any:
-    """Create a minimal chunk with .content (incremental text token or None)."""
-    return SimpleNamespace(content=content)
+def _make_tool_call(id: str, name: str, arguments: str = "{}") -> chat_pb2.ToolCall:
+    """Create a real protobuf ToolCall (client-side) for use in fake responses/chunks.
+
+    Real protos are required on responses because chat.py does
+    assistant_message.tool_calls.extend(last_response.tool_calls) where the
+    target repeated field validates that items are chat_pb2.ToolCall messages.
+    """
+    tc = chat_pb2.ToolCall()
+    tc.id = id
+    tc.type = chat_pb2.TOOL_CALL_TYPE_CLIENT_SIDE_TOOL
+    tc.function.name = name
+    tc.function.arguments = arguments
+    return tc
 
 
-def _make_response(tool_calls: list[Any] | None = None) -> Any:
-    """Create a response object; tool_calls (if present) are inspected after streaming a turn."""
-    return SimpleNamespace(tool_calls=tool_calls or [])
+def _make_chunk(content: str | None = None, tool_calls: list[Any] | None = None) -> Any:
+    """Create a chunk with .content (token) and .tool_calls (may be empty).
+
+    For tool_calls we accept either real protos or SimpleNamespace (the loop only
+    reads .type via get_tool_call_type and .function.name for the Calling metadata).
+    """
+    return SimpleNamespace(content=content, tool_calls=tool_calls or [])
+
+
+def _make_response(content: str = "", tool_calls: list[Any] | None = None) -> Any:
+    """Create a (partial/final) response carrying .content and .tool_calls.
+
+    tool_calls here should be real chat_pb2.ToolCall when simulating tool turns
+    (see _make_tool_call) so that extend onto assistant proto succeeds.
+    """
+    return SimpleNamespace(content=content, tool_calls=tool_calls or [])
 
 
 def make_text_only_stream(text: str) -> list[tuple[Any, Any]]:
-    """Simple single response stream (no tools). Yields (resp, chunk) pairs."""
-    # Split into a couple tokens to exercise multiple yields + final content
+    """Simple single response stream (no tools). Yields (resp, chunk) pairs.
+
+    Responses carry accumulating content so that token-yield snapshots and the
+    post-loop last_response.content produce the expected full text in history dicts.
+    """
     tokens = [text[: len(text) // 2], text[len(text) // 2 :]]
-    return [
-        (_make_response(), _make_chunk(content=tokens[0])),
-        (_make_response(), _make_chunk(content=tokens[1])),
-    ]
+    pairs: list[tuple[Any, Any]] = []
+    partial = ""
+    for tok in tokens:
+        partial += tok
+        pairs.append((_make_response(content=partial), _make_chunk(content=tok)))
+    return pairs
 
 
 def make_tool_call_stream(
@@ -57,44 +90,59 @@ def make_tool_call_stream(
 ) -> list[tuple[Any, Any]]:
     """Stream that ends with a (client-side) tool call on the final response.
 
-    Optionally includes preceding assistant text content.
+    Optionally includes preceding assistant text content. Tool calls are placed on
+    *both* the response and chunk of the terminating pair because chat.py reads
+    chunk.tool_calls (to decide client-side handling) and last_response.tool_calls
+    (to attach to assistant history entry).
     """
     pairs: list[tuple[Any, Any]] = []
+    tc = _make_tool_call("call_123", tool_name, arguments)
     if preceding_text:
-        pairs.append((_make_response(), _make_chunk(content=preceding_text)))
-    # The tool_calls live on the response of the last yielded pair for this turn.
-    tc = SimpleNamespace(
-        id="call_123",
-        function=SimpleNamespace(name=tool_name, arguments=arguments),
-    )
-    pairs.append((_make_response(tool_calls=[tc]), _make_chunk(content=None)))
+        # Colocate the preceding text + tool_calls on the *same* (final) response/chunk pair.
+        # This matches real xai-sdk stream behavior (last Response carries full .content
+        # *and* .tool_calls). It ensures the post-stream append uses last_response.content
+        # containing the text, so it persists in self.chat_history (the test asserts this).
+        pairs.append(
+            (
+                _make_response(content=preceding_text, tool_calls=[tc]),
+                _make_chunk(content=preceding_text, tool_calls=[tc]),
+            )
+        )
+    else:
+        pairs.append(
+            (
+                _make_response(content="", tool_calls=[tc]),
+                _make_chunk(content=None, tool_calls=[tc]),
+            )
+        )
     return pairs
 
 
 def make_multi_tool_call_stream() -> list[tuple[Any, Any]]:
     """Stream with two parallel client-side tool calls (on final response)."""
-    tc0 = SimpleNamespace(
-        id="call_a", function=SimpleNamespace(name="today_date", arguments="{}")
-    )
-    tc1 = SimpleNamespace(
-        id="call_b", function=SimpleNamespace(name="other", arguments='{"x":1}')
-    )
-    return [(_make_response(tool_calls=[tc0, tc1]), _make_chunk(content=None))]
+    tc0 = _make_tool_call("call_a", "today_date", "{}")
+    tc1 = _make_tool_call("call_b", "other", '{"x":1}')
+    tcs = [tc0, tc1]
+    return [
+        (
+            _make_response(content="", tool_calls=tcs),
+            _make_chunk(content=None, tool_calls=tcs),
+        )
+    ]
 
 
 def create_responder(
     streams: list[list[tuple[Any, Any]]],
-) -> Callable[
-    [str, list[dict[str, Any]], list[Any]], Generator[tuple[Any, Any], None, None]
-]:
+) -> ChatCompleter:
     """Stateful fake completer that yields successive (response, chunk) streams.
 
-    Matches the new ChatCompleter contract used by ChatInterface.chat.
+    Returns something assignable to ChatCompleter (model, Sequence[chat_pb2.Message], tools).
+    The messages arg is ignored (fakes are stateful by call order).
     """
     call_idx = 0
 
     def completer(
-        model: str, messages: list[dict[str, Any]], tools: list[Any]
+        model: str, messages: Sequence[chat_pb2.Message], tools: list[Any]
     ) -> Generator[tuple[Any, Any], None, None]:
         nonlocal call_idx
         stream = streams[min(call_idx, len(streams) - 1)]
@@ -226,8 +274,8 @@ def test_chat_streams_single_simple_response_and_updates_history(
 
     # Internal history should match (user + assistant, no tool entries)
     assert len(iface.chat_history) == 2
-    assert iface.chat_history[0]["role"] == "user"
-    assert iface.chat_history[1]["role"] == "assistant"
+    assert message_to_dict(iface.chat_history[0])["role"] == "user"
+    assert message_to_dict(iface.chat_history[1])["role"] == "assistant"
 
 
 def test_chat_multiple_turns_accumulates_history_correctly(
@@ -244,7 +292,7 @@ def test_chat_multiple_turns_accumulates_history_correctly(
 
     # After two turns we should have 4 entries in internal history
     assert len(iface.chat_history) == 4
-    roles = [e["role"] for e in iface.chat_history]
+    roles = [message_to_dict(e)["role"] for e in iface.chat_history]
     assert roles == ["user", "assistant", "user", "assistant"]
 
     # The last yield of second turn contains the latest assistant message
@@ -256,15 +304,15 @@ def test_chat_handles_tool_call_and_continues_for_non_image_tool(
     mock_context: MagicMock,
 ) -> None:
     """Tool call path: stream yields content then final response carries tool_calls; handler invoked, loop continues for final answer."""
-    # No preceding text so first collect produces only the tool items (full_response stays ""),
-    # leading to history of exactly [user, tool, final_asst] after the continue + second turn.
     tool_stream = make_tool_call_stream()
     final_stream = make_text_only_stream("Today is 2025-09-18.")
 
-    tool_responses = [
-        {"role": "tool", "content": "2025-09-18", "tool_call_id": "call_123"}
-    ]
-    handler: ToolHandler = MagicMock(return_value=(tool_responses, [None]))
+    tool_res = ToolResult(
+        content_for_model="2025-09-18",
+        content="2025-09-18",
+        tool_call_id="call_123",
+    )
+    handler: ToolHandler = MagicMock(return_value=[tool_res])
 
     iface = ChatInterface(
         mock_context,
@@ -277,19 +325,22 @@ def test_chat_handles_tool_call_and_continues_for_non_image_tool(
     handler.assert_called_once()  # type: ignore[attr-defined]
     # History: user, assistant(with tool_calls), tool(result), assistant(final)
     assert len(iface.chat_history) == 4
-    assert iface.chat_history[0]["role"] == "user"
-    assert iface.chat_history[1]["role"] == "assistant"
-    assert "tool_calls" in iface.chat_history[1]
-    assert iface.chat_history[2]["role"] == "tool"
-    assert iface.chat_history[2]["content"] == "2025-09-18"
-    assert iface.chat_history[3]["role"] == "assistant"
-    assert "2025-09-18" in iface.chat_history[3]["content"]
+    assert message_to_dict(iface.chat_history[0])["role"] == "user"
+    assert message_to_dict(iface.chat_history[1])["role"] == "assistant"
+    assert len(getattr(iface.chat_history[1], "tool_calls", [])) == 1
+    assert message_to_dict(iface.chat_history[2])["role"] == "tool"
+    assert message_to_dict(iface.chat_history[2])["content"] == "2025-09-18"
+    assert message_to_dict(iface.chat_history[3])["role"] == "assistant"
+    assert "2025-09-18" in message_to_dict(iface.chat_history[3])["content"]
 
-    # At least one yield should contain the tool role entry (after first collect)
-    tool_yield_found = any(
-        any(h.get("role") == "tool" for h in hist) for hist, _ in yields
+    # Tool role lives only in internal history (for model context); yields contain
+    # user/assistant (+ metadata asst entries for Thinking/Calling). Verify a Calling
+    # metadata entry was produced for the tool turn.
+    calling_found = any(
+        any("Calling" in (h.get("metadata", {}) or {}).get("title", "") for h in hist)
+        for hist, _ in yields
     )
-    assert tool_yield_found
+    assert calling_found
 
 
 def test_chat_tool_call_to_generate_image_sets_image_and_stops(
@@ -305,14 +356,10 @@ def test_chat_tool_call_to_generate_image_sets_image_and_stops(
     tool_result = ToolResult(
         content_for_model="Image generated successfully",
         content=sample_png_bytes,
+        tool_call_id="call_img",
         content_type="image",
     )
-    handler: ToolHandler = MagicMock(
-        return_value=(
-            [{"role": "tool", "content": "", "tool_call_id": "call_img"}],
-            [tool_result],
-        )
-    )
+    handler: ToolHandler = MagicMock(return_value=[tool_result])
 
     iface = ChatInterface(
         mock_context,
@@ -334,12 +381,12 @@ def test_chat_tool_call_to_generate_image_sets_image_and_stops(
     # The preceding text from model should be present (check internal history after consumption
     # as it is mutated by appends that happen after the tool_result yield snapshot).
     assert any(
-        "Calling the image generation tool" in (h.get("content") or "")
+        "Calling the image generation tool" in (message_to_dict(h).get("content") or "")
         for h in iface.chat_history
-        if h.get("role") == "assistant"
+        if message_to_dict(h).get("role") == "assistant"
     )
     # Tool entry present (in final internal state after append/extend that occur after the last yield)
-    assert any(h.get("role") == "tool" for h in iface.chat_history)
+    assert any(message_to_dict(h).get("role") == "tool" for h in iface.chat_history)
 
 
 def test_chat_catches_exception_and_yields_generic_error(
@@ -348,7 +395,7 @@ def test_chat_catches_exception_and_yields_generic_error(
     """Exception path in the main chat loop produces a friendly error message."""
 
     def exploding_completer(
-        model: str, messages: list[dict[str, Any]], tools: list[Any]
+        model: str, messages: Sequence[chat_pb2.Message], tools: list[Any]
     ) -> Generator[tuple[Any, Any], None, None]:
         raise RuntimeError("boom from test")
 
@@ -357,7 +404,10 @@ def test_chat_catches_exception_and_yields_generic_error(
     yields = list(iface.chat("Trigger error", [], "Question"))
 
     assert len(iface.chat_history) == 2
-    assert "error processing your request" in iface.chat_history[-1]["content"].lower()
+    assert (
+        "error processing your request"
+        in message_to_dict(iface.chat_history[-1])["content"].lower()
+    )
 
     # Last yield contains the error
     last_hist, _ = yields[-1]
@@ -370,7 +420,7 @@ def test_clear_history_resets_chat_and_image_state(
     """clear_history empties history and removes any generated image."""
     # Seed some state via a fake image-producing interaction (simplified)
     iface = ChatInterface(mock_context)
-    iface.chat_history = [{"role": "user", "content": "x"}]
+    iface.chat_history = [user("x")]
     iface.image = PILImage.open(BytesIO(sample_png_bytes))
 
     result = iface.clear_history()
@@ -390,15 +440,12 @@ def test_chat_handles_multiple_parallel_tool_calls(
     """
     multi_stream = make_multi_tool_call_stream()
 
-    # Handler will be called with reconstructed tool_calls (we just need it not to explode)
+    # Handler will be called with list[ToolCall] (raw protos from last response)
     handler: ToolHandler = MagicMock(
-        return_value=(
-            [
-                {"role": "tool", "content": "a", "tool_call_id": "call_a"},
-                {"role": "tool", "content": "b", "tool_call_id": "call_b"},
-            ],
-            [None, None],
-        )
+        return_value=[
+            ToolResult(content_for_model="a", content="a", tool_call_id="call_a"),
+            ToolResult(content_for_model="b", content="b", tool_call_id="call_b"),
+        ]
     )
 
     # Provide a second stream so the non-image tool path's "continue" has a terminating text response
@@ -412,11 +459,11 @@ def test_chat_handles_multiple_parallel_tool_calls(
     _ = list(iface.chat("Use two tools", [], "Question"))
 
     handler.assert_called_once()  # type: ignore[attr-defined]
-    # The reconstructed message passed to handler should have two tool_calls
+    # The arg passed to handler is the list[ToolCall] directly (from last_response.tool_calls)
     call_arg = handler.call_args[0][0]  # type: ignore[attr-defined]
-    assert len(call_arg.tool_calls) == 2
-    assert call_arg.tool_calls[0].id == "call_a"
-    assert call_arg.tool_calls[1].function.arguments == '{"x":1}'
+    assert len(call_arg) == 2
+    assert call_arg[0].id == "call_a"
+    assert call_arg[1].function.arguments == '{"x":1}'
 
 
 def test_chat_tool_result_without_image_mode_does_not_set_image(
@@ -427,14 +474,10 @@ def test_chat_tool_result_without_image_mode_does_not_set_image(
     weird_result = ToolResult(
         content_for_model="should not become image",
         content=b"not real png",
+        tool_call_id="c",
         content_type="image",
     )
-    handler: ToolHandler = MagicMock(
-        return_value=(
-            [{"role": "tool", "content": "x", "tool_call_id": "c"}],
-            [weird_result],
-        )
-    )
+    handler: ToolHandler = MagicMock(return_value=[weird_result])
 
     # Second stream terminates the while-loop after the tool "continue" (non-image mode)
     finisher = make_text_only_stream("Acknowledged tool result.")

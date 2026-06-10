@@ -21,6 +21,7 @@ This file provides persistent guidance for GitHub Copilot (and other AI coding a
    - Use `pytest` 
    - Run `uv run pytest` and ensure green before suggesting changes.
    - Prefer descriptive test names: `test_xxx_does_yyy_when_zzz`.
+   - Aim for 90% or more test coverage per module
 
 4. **Project Structure Discipline**
    - Source code **always** under `src/python_chat/`.

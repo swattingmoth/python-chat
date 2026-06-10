@@ -76,26 +76,17 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
 def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult() -> (
     None
 ):
-    """The tool wrapper obtains context, temporarily uses IMAGES model, calls generate, wraps in ToolResult."""
-    # The autouse fixture already created a context with a client that returns b64
-    # We just need to ensure use_model was used and result shape is correct.
-
-    with patch("python_chat.images.generate_image") as mock_gen:
-        mock_gen.return_value = ("/tmp/f.png", b"imgdata")
-
-        result = generate_image_tool("draw a tree")
+    """The image tool wrapper obtains context and returns a ToolResult containing bytes."""
+    with patch("builtins.open", mock_open(read_data=b"imgdata")) as mock_file:
+        result = generate_image_tool("draw a tree", "tool-call-1")
 
         assert isinstance(result, ToolResult)
         assert result.content_for_model == "Generated an image."
         assert result.content == b"imgdata"
         assert result.content_type == "image"
+        assert result.tool_call_id == "tool-call-1"
 
-        # Verify it switched model during call
-        mock_gen.assert_called_once()
-        args, _ = mock_gen.call_args
-        # The call inside tool is positional: generate_image(prompt, model_context.model_name, client, path)
-        # Inside the with use_model(IMAGES) the .model_name has been switched.
-        assert args[1] == Models.IMAGES
+        mock_file.assert_called_once()
 
 
 def test_generate_image_tool_propagates_context_errors() -> None:
@@ -103,4 +94,4 @@ def test_generate_image_tool_propagates_context_errors() -> None:
     ModelContext.reset()  # force uninitialized
 
     with pytest.raises(Exception, match="has not been initialized"):
-        generate_image_tool("anything")
+        generate_image_tool("anything", "tool-call-2")

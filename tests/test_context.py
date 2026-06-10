@@ -6,15 +6,15 @@ validation, and error cases. Uses mocks for xAI Client; reset() between tests.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any, Generator
+from typing import Generator
 from unittest.mock import MagicMock
 
 import pytest
+from xai_sdk.proto import chat_pb2
 
 from python_chat.api import Models
 from python_chat.context import ModelContext
-from python_chat.tools import ToolResult, Tools
+from python_chat.tools import Tools
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +85,7 @@ def test_model_context_register_remove_tool_delegates_to_tools() -> None:
 
 
 def test_model_context_handle_tool_calls_delegates() -> None:
-    """handle_tool_calls forwards to Tools and returns its result."""
+    """handle_tool_calls forwards to Tools and returns a list of ToolResult."""
     fake_client = MagicMock()
     ctx = ModelContext.create(fake_client, "/p")
 
@@ -94,17 +94,21 @@ def test_model_context_handle_tool_calls_delegates() -> None:
 
     ctx.register_tool(echo, "echo")
 
-    msg = SimpleNamespace(
-        tool_calls=[
-            SimpleNamespace(
-                id="c1", function=SimpleNamespace(name="echo", arguments='{"s": "hi"}')
-            )
-        ]
-    )
+    tool_calls = [
+        chat_pb2.ToolCall(
+            id="c1",
+            function=chat_pb2.FunctionCall(
+                name="echo",
+                arguments='{"s": "hi"}',
+            ),
+        )
+    ]
 
-    responses, results = ctx.handle_tool_calls(msg)
-    assert responses[0]["content"] == "hi"
-    assert results[0] is None
+    results = ctx.handle_tool_calls(tool_calls)
+
+    assert len(results) == 1
+    assert results[0].content == "hi"
+    assert results[0].tool_call_id == "c1"
 
 
 def test_model_context_use_model_temporarily_switches_and_restores() -> None:
@@ -148,15 +152,10 @@ def test_model_context_complex_questions_adds_additional_tools() -> None:
 
     ctx.model_name = Models.COMPLEX_QUESTIONS
     tools = ctx.get_tools_for_model()
-    # For COMPLEX we now return [web_search()] proto objects (not dicts).
-    # We assert non-empty and that the tool name is present on the proto.
-    assert len(tools) == 1
-    # xai_sdk.tools.web_search() produces a tool whose name is "web_search"
-    assert getattr(tools[0], "name", None) == "web_search" or "web_search" in str(
-        tools[0]
-    )
+    # For COMPLEX we now return both native server-side tools.
+    assert len(tools) == 2
+    assert any(tool.HasField("web_search") for tool in tools)
+    assert any(tool.HasField("code_execution") for tool in tools)
 
     ctx.model_name = Models.QUESTIONS
-    assert (
-        ctx.get_tools_for_model() == []
-    )  # additional tools should be removed when switching
+    assert ctx.get_tools_for_model() == []
