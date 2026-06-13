@@ -1,12 +1,16 @@
 import base64
+import logging
 import os
 import uuid
+from venv import logger
 
 from xai_sdk import Client
 
 from python_chat.api import Models
 from python_chat.context import ModelContext
 from python_chat.tools import ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 def generate_image(
@@ -46,7 +50,7 @@ def generate_image(
     with open(image_file, "wb") as f:
         f.write(image_data)
 
-    print(f"Generated image saved to {image_file}")
+    logger.info(f"Generated image saved to {image_file}")
 
     return (image_file, image_data)
 
@@ -55,7 +59,7 @@ def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
     """Tool function to generate an image."""
     model_context = ModelContext.current()
     with model_context.use_model(Models.IMAGES):
-        _, image_data = generate_image(
+        image_file, image_data = generate_image(
             prompt,
             model_context.model_name,
             model_context.client,
@@ -69,7 +73,7 @@ def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
     #     image_data = f.read()
 
     return ToolResult(
-        content_for_model="Generated an image.",
+        content_for_model=f"Generated image {os.path.basename(image_file)}",
         content=image_data,
         content_type="image",
         tool_call_id=tool_call_id,

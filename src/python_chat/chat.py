@@ -3,8 +3,17 @@ from __future__ import annotations
 from http import client
 import io
 from json import tool
+from logging import Logger
+import logging
+from secrets import choice
 from types import SimpleNamespace
 from typing import Any, Callable, Generator, Optional, TYPE_CHECKING, Sequence
+import os
+from functools import wraps
+
+# Disable OpenTelemetry tracing early to prevent context token issues
+os.environ.setdefault("OTEL_TRACES_EXPORTER", "none")
+os.environ.setdefault("OTEL_METRICS_EXPORTER", "none")
 
 from google.protobuf import json_format
 from PIL import Image
@@ -20,7 +29,36 @@ from python_chat.context import ModelContext
 from python_chat.tools import ToolResult
 from xai_sdk.proto import chat_pb2
 
-if TYPE_CHECKING:
+logger = logging.getLogger(__name__)
+
+# Suppress OpenTelemetry context detach errors that occur during stream cleanup
+# This is a known issue when streaming crosses async/thread boundaries
+logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
+
+# Monkey-patch OpenTelemetry's context detach to silently ignore cross-context errors
+try:
+    from opentelemetry.context import contextvars_context
+
+    _original_detach = contextvars_context.ContextVarsRuntimeContext.detach
+
+    @wraps(_original_detach)
+    def _patched_detach(self: Any, token: Any) -> None:
+        """Patched detach that silently ignores cross-context token errors."""
+        try:
+            _original_detach(self, token)
+        except ValueError as e:
+            if "was created in a different Context" in str(e):
+                # This error occurs when stream cleanup happens in a different context
+                # It's safe to ignore as the context is being abandoned anyway
+                logger.debug(f"Ignoring cross-context detach error: {e}")
+            else:
+                raise
+
+    # Bypass type checker by using setattr via getattr to avoid assignment to method
+    setattr(contextvars_context.ContextVarsRuntimeContext, "detach", _patched_detach)
+except ImportError:
+    # OpenTelemetry not available, no need to patch
+    pass
     # The exact Response/Chunk types are runtime objects from the xai stream();
     # we use Any at runtime to avoid importing heavy protobuf wrappers in type position.
     pass
@@ -81,77 +119,6 @@ def get_system_message_for_choice(choice: str) -> str:
     return SYSTEM_MESSAGE
 
 
-# def _to_xai_message(msg: dict[str, Any]) -> Any:
-#     """Convert internal chat history dict into an xai_sdk chat message.
-
-#     Handles system/user/tool_result and assistant messages.
-#     For assistant messages carrying prior tool_calls (to continue a tool loop),
-#     we construct a low-level chat_pb2.Message so that tool_calls are attached.
-#     """
-#     role = msg.get("role")
-#     content: str = msg.get("content") or ""
-
-#     if role == "system":
-#         return system(content)
-#     if role == "user":
-#         return user(content)
-#     if role == "tool":
-#         tool_call_id: str = msg.get("tool_call_id", "")
-#         return tool_result(tool_call_id=tool_call_id, result=content or "")
-#     if role == "assistant":
-#         assistant_msg = assistant(content)
-#         tool_calls = msg.get("tool_calls")
-#         if tool_calls:
-#             for tc in tool_calls:
-#                 if isinstance(tc, dict):
-#                     fid = tc.get("id", "")
-#                     fn = tc.get("function", {}) or {}
-#                     fname = fn.get("name", "") if isinstance(fn, dict) else ""
-#                     fargs = fn.get("arguments", "") if isinstance(fn, dict) else ""
-#                 else:
-#                     fid = getattr(tc, "id", "")
-#                     fn = getattr(tc, "function", None)
-#                     fname = getattr(fn, "name", "") if fn else ""
-#                     fargs = getattr(fn, "arguments", "") if fn else ""
-#                 assistant_msg.tool_calls.append(
-#                     chat_pb2.ToolCall(
-#                         id=fid,
-#                         function=chat_pb2.FunctionCall(name=fname, arguments=fargs),
-#                     )
-#                 )
-#     # Fallback
-#     return user(str(content))
-
-
-# def _normalize_tool_call(tc: Any) -> SimpleNamespace:
-#     """Normalize an xai tool call (proto, dict, or ns) to the SimpleNamespace shape
-#     expected by ToolHandler ( {id, function: {name, arguments}} ).
-#     """
-#     if isinstance(tc, SimpleNamespace):
-#         return tc
-#     if isinstance(tc, dict):
-#         fid = tc.get("id", "")
-#         fn = tc.get("function", {}) or {}
-#         fname = fn.get("name", "") if isinstance(fn, dict) else getattr(fn, "name", "")
-#         fargs = (
-#             fn.get("arguments", "")
-#             if isinstance(fn, dict)
-#             else getattr(fn, "arguments", "")
-#         )
-#         return SimpleNamespace(
-#             id=fid,
-#             function=SimpleNamespace(name=fname, arguments=fargs),
-#         )
-#     # assume protobuf / object with attributes
-#     fid = getattr(tc, "id", "") or ""
-#     fn = getattr(tc, "function", None)
-#     fname = getattr(fn, "name", "") if fn is not None else ""
-#     fargs = getattr(fn, "arguments", "") if fn is not None else ""
-#     return SimpleNamespace(
-#         id=fid,
-#         function=SimpleNamespace(name=fname, arguments=fargs),
-#     )
-
 ROLE_MAP: dict[chat_pb2.MessageRole, str] = {
     chat_pb2.MessageRole.ROLE_ASSISTANT: "assistant",
     chat_pb2.MessageRole.ROLE_USER: "user",
@@ -164,6 +131,13 @@ def message_to_dict(msg: chat_pb2.Message) -> dict[str, Any]:
     """Convert a chat_pb2.Message into a dict for UI consumption."""
     role = ROLE_MAP.get(msg.role, "unknown")
     content = "\n".join([c.text or "" for c in msg.content or ""])  # type: ignore
+
+    if msg.tool_calls:
+        return {
+            "role": role,
+            "content": content,
+            "tool_calls": [json_format.MessageToDict(tc) for tc in msg.tool_calls],
+        }
 
     return {"role": role, "content": content}
 
@@ -221,6 +195,11 @@ class ChatInterface:
         """Default tool execution using the model context's registered tools."""
         return self.modelContext.handle_tool_calls(message)
 
+    def append_to_history(self, message: chat_pb2.Message) -> None:
+        """Append a message to the chat history."""
+        self.chat_history.append(message)
+        logger.info(f"Appended message to history: {message_to_dict(message)}")
+
     def chat(
         self, message: str, chat_history: list[dict[str, Any]], choice: str
     ) -> Generator[Any, Any, Any]:
@@ -238,29 +217,34 @@ class ChatInterface:
             yield chat_history, self.image
             return
 
-        # Add user message to history
-        self.chat_history.append(user(message))
-        local_chat_history = [
-            message_to_dict(c) for c in self.chat_history
-        ]  # Create a local copy for this interaction
-        yield local_chat_history + [
-            {
-                "role": "assistant",
-                "content": "",
-                "metadata": {"title": "Thinking...", "status": "pending"},
-            }
-        ], self.image  # Yield initial state with user message added
-
-        self.modelContext.model_name = get_model_for_choice(choice)
+        new_model = get_model_for_choice(choice)
+        system_message = get_system_message_for_choice(choice)
         is_image_mode = choice == "Generate Image"
 
+        if self.modelContext.model_name != new_model:
+            self.modelContext.model_name = get_model_for_choice(choice)
+            logger.info(
+                f"Set model to {self.modelContext.model_name}, is_image_mode={is_image_mode}"
+            )
+            logger.info(f"System message:\n{system_message}")
+
         try:
-            # Process in a loop to handle (client-side) tool calls and follow-ups.
-            # Server-side tools (web_search etc.) are executed by xAI inside create();
-            # only client_side_tool calls require us to run local handlers and loop.
+            # Add user message to history
+            self.append_to_history(user(message))
+            local_chat_history = [
+                message_to_dict(c) for c in self.chat_history
+            ]  # Create a local copy for this interaction
+            yield local_chat_history + [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {"title": "Thinking...", "status": "pending"},
+                }
+            ], self.image  # Yield initial state with user message added
+
             while True:
                 # Build messages with system context
-                messages = [system(get_system_message_for_choice(choice))]
+                messages = [system(system_message)]
                 messages.extend(self.chat_history)
 
                 # prevent the model from calling the image generation tool multiple times for a single response.
@@ -279,7 +263,7 @@ class ChatInterface:
                     token = getattr(chunk, "content", None)
                     if token:
                         yield local_chat_history + [
-                            {"role": "assistant", "content": response.content}
+                            message_to_dict(assistant(response.content))
                         ], self.image
 
                     for tool_call in chunk.tool_calls:
@@ -300,14 +284,9 @@ class ChatInterface:
                 if last_response:
                     assistant_message = assistant(last_response.content)
                     assistant_message.tool_calls.extend(last_response.tool_calls)
-                    self.chat_history.append(assistant_message)
+                    self.append_to_history(assistant_message)
 
-                    local_chat_history.append(
-                        {
-                            "role": "assistant",
-                            "content": last_response.content or "",
-                        }
-                    )
+                    local_chat_history.append(message_to_dict(assistant_message))
 
                 if client_tool_calls:
                     tool_results = self._tool_handler(client_tool_calls)
@@ -322,30 +301,26 @@ class ChatInterface:
                                     pass
                             # Yield so the UI can display the image promptly
                             yield local_chat_history + [
-                                {
-                                    "role": "assistant",
-                                    "content": (
+                                message_to_dict(
+                                    assistant(
                                         last_response.content if last_response else ""
-                                    ),
-                                }
+                                    )
+                                )
                             ], self.image
 
-                        self.chat_history.append(
+                        self.append_to_history(
                             tool_result(
                                 tr.content_for_model, tool_call_id=tr.tool_call_id
                             )
                         )
 
                     if is_image_mode and self.image:
-                        # ensure we stop after one image generation per user turn
-                        self._print_chat()
                         break
                 else:
-                    self._print_chat()
                     break
 
         except Exception as e:
-            print(f"Error in chat: {e}")
+            Logger(f"Error in chat: {e}")
             # Show generic error without details
             error_msg = (
                 "I encountered an error processing your request. Please try again."
@@ -353,14 +328,9 @@ class ChatInterface:
             self.chat_history.append(assistant(error_msg))
             yield [message_to_dict(m) for m in self.chat_history], self.image
 
-    def _print_chat(self) -> None:
-        print("*********** Finished a chat iteration ***********")
-        for entry in self.chat_history:
-            print(message_to_dict(entry))
-        print("**********************************************")
-
     def clear_history(self) -> list[dict[str, Any]]:
         """Clear stored chat history and reset the image output."""
         self.chat_history = []
         self.image = None
+        logger.info("Cleared chat history and reset image.")
         return []

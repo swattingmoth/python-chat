@@ -1,3 +1,6 @@
+import datetime
+import logging
+from math import log
 from typing import Any, Generator, Optional, cast
 
 import gradio as gr
@@ -5,6 +8,25 @@ import gradio as gr
 from python_chat.chat import ChatInterface
 from python_chat.context import ModelContext
 from python_chat.images import generate_image_tool
+
+
+def configure_logging(
+    logfile_path: Optional[str] = None, log_to_console: bool = True
+) -> None:
+
+    if not logfile_path:
+        tdy = datetime.date.today().strftime("%Y-%m-%d")
+        logfile_path = rf"c:\temp\chatbot_logs\chatbot_{tdy}.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=(
+            [logging.FileHandler(logfile_path), logging.StreamHandler()]
+            if log_to_console
+            else [logging.FileHandler(logfile_path)]
+        ),
+    )
 
 
 def launch_app() -> gr.Blocks:

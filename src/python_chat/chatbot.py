@@ -4,16 +4,21 @@ This assumes use of the XAI API, but can be modified to work with other APIs.
 All generated images are written to disk. The default path is c:\temp, but can be changed by modifying the call to ModelContext.create in the __main__ block.
 """
 
-from dotenv import load_dotenv
 import os
 
-from python_chat.app import launch_app
+os.environ["XAI_SDK_DISABLE_TRACING"] = "true"
+
+from dotenv import load_dotenv
+
+from python_chat.app import configure_logging, launch_app
 from python_chat.api import init_api
 from python_chat.context import ModelContext
 from python_chat.tools import today_date
 
 if __name__ == "__main__":
     load_dotenv()
+    configure_logging()
+
     xai_api_key = os.getenv("XAI_API_KEY")
     image_folder = os.getenv("IMAGE_FOLDER")
     if not image_folder:

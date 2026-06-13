@@ -4,6 +4,7 @@ import inspect
 import json
 from datetime import datetime
 from json import tool
+import logging
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
@@ -11,6 +12,8 @@ from attr import dataclass
 from xai_sdk.chat import tool as xai_tool
 
 from xai_sdk.proto import chat_pb2
+
+logger = logging.getLogger(__name__)
 
 
 def today_date() -> str:
@@ -127,14 +130,14 @@ class Tools:
         tool_results: list[ToolResult] = []
         tool_call_counts: dict[str, int] = defaultdict(int)
         for tool_call in tool_calls:
-            print(f"Got tool call {tool_call}")
+            logging.debug(f"Got tool call {tool_call}")
             # check if tool call count for this tool exceeds max_turns
 
             func = self.tools.get(tool_call.function.name, {})
             if func:
                 max_turns = func.get("max_turns")
                 if max_turns and tool_call_counts[tool_call.function.name] >= max_turns:
-                    print(
+                    logging.debug(
                         f"Skipping tool call {tool_call}. Already called {tool_call_counts[tool_call.function.name]} time(s)."
                     )
                     continue
@@ -142,13 +145,13 @@ class Tools:
 
                 try:
                     arguments = json.loads(tool_call.function.arguments)
-                    print(
+                    logging.debug(
                         f"Calling function {func['function']} with arguments {arguments}"
                     )
                     if func["accept_tool_call_id"]:
                         arguments["tool_call_id"] = tool_call.id
                     result = func["function"](**arguments)
-                    print(f"Got result {result} from tool call")
+                    logging.debug(f"Got result {result} from tool call")
 
                     if isinstance(result, ToolResult):
                         tool_results.append(result)
@@ -158,7 +161,9 @@ class Tools:
                         )
 
                 except Exception as e:
-                    print(f"Error executing tool {tool_call.function.name}: {e}")
+                    logging.debug(
+                        f"Error executing tool {tool_call.function.name}: {e}"
+                    )
                     arguments = {}
                     tool_results.append(
                         ToolResult(

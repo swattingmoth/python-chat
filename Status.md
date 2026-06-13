@@ -1,4 +1,11 @@
-# Current Status 6/8/2026
+# Current Status 6/13/2026
+- Added logging
+- Fixed Open Telemetry Error
+
+**TODO:** 
+Fix Failing image test. Need to create a mock xAI client that returns the proper image result
+
+# 6/8/2026
 Tested the tool loop
 - No tool calls: Worked
 - Single tool call with followup reasoning: Worked

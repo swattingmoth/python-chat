@@ -81,7 +81,7 @@ def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult(
         result = generate_image_tool("draw a tree", "tool-call-1")
 
         assert isinstance(result, ToolResult)
-        assert result.content_for_model == "Generated an image."
+        assert result.content_for_model.startswith("Generated image")
         assert result.content == b"imgdata"
         assert result.content_type == "image"
         assert result.tool_call_id == "tool-call-1"
