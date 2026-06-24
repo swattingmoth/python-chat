@@ -10,6 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Generator
 from unittest.mock import MagicMock, mock_open, patch
+from xai_sdk import Client
 
 import pytest
 
@@ -76,17 +77,29 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
 def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult() -> (
     None
 ):
-    """The image tool wrapper obtains context and returns a ToolResult containing bytes."""
-    with patch("builtins.open", mock_open(read_data=b"imgdata")) as mock_file:
+    """The image tool wrapper uses context and returns a ToolResult from generate_image output."""
+    model_context = ModelContext.current()
+    assert model_context.model_name == Models.QUESTIONS
+
+    with patch(
+        "python_chat.images.generate_image",
+        return_value=("/tmp/test-images/generated.png", b"imgdata"),
+    ) as mock_generate_image:
         result = generate_image_tool("draw a tree", "tool-call-1")
 
-        assert isinstance(result, ToolResult)
-        assert result.content_for_model.startswith("Generated image")
-        assert result.content == b"imgdata"
-        assert result.content_type == "image"
-        assert result.tool_call_id == "tool-call-1"
+    assert isinstance(result, ToolResult)
+    assert result.content_for_model == "Generated image generated.png"
+    assert result.content == b"imgdata"
+    assert result.content_type == "image"
+    assert result.tool_call_id == "tool-call-1"
 
-        mock_file.assert_called_once()
+    mock_generate_image.assert_called_once_with(
+        "draw a tree",
+        Models.IMAGES,
+        model_context.client,
+        model_context.image_path,
+    )
+    assert ModelContext.current().model_name == Models.QUESTIONS
 
 
 def test_generate_image_tool_propagates_context_errors() -> None:

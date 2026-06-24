@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from http import client
 import io
-from json import tool
 from logging import Logger
 import logging
-from secrets import choice
-from types import SimpleNamespace
-from typing import Any, Callable, Generator, Optional, TYPE_CHECKING, Sequence
+from typing import Any, Callable, Generator, Optional, Sequence
 import os
 from functools import wraps
 
@@ -18,11 +14,8 @@ os.environ.setdefault("OTEL_METRICS_EXPORTER", "none")
 from google.protobuf import json_format
 from PIL import Image
 
-import xai_sdk
 from xai_sdk.chat import Chunk, Response, assistant, system, tool_result, user
-import xai_sdk.chat
 from xai_sdk.tools import get_tool_call_type
-from xai_sdk.types import Content
 
 from python_chat.api import Models
 from python_chat.context import ModelContext
