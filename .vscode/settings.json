@@ -41,5 +41,8 @@
     },
 
     // Future: Ruff, isort etc. when added
-    "ruff.importStrategy": "fromEnvironment"
+    "ruff.importStrategy": "fromEnvironment",
+    "chat.tools.terminal.autoApprove": {
+        "uv": true
+    }
 }

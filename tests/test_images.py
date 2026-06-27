@@ -8,8 +8,8 @@ additionally depends on the ModelContext singleton.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Generator
-from unittest.mock import MagicMock, mock_open, patch
+from typing import Any, Generator
+from unittest.mock import MagicMock, patch
 from xai_sdk import Client
 
 import pytest
@@ -46,9 +46,9 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
     with (
         patch("python_chat.images.uuid.uuid4") as mock_uuid,
         patch(
-            "python_chat.images.os.path.join", return_value="/tmp/test-images/fake.png"
-        ) as mock_join,
-        patch("builtins.open", mock_open()) as mock_file,
+            "python_chat.images.ensure_local_image_copy",
+            return_value="/tmp/test-images/fake.png",
+        ) as mock_local_copy,
     ):
         mock_uuid.return_value = "test-uuid-1234"
 
@@ -66,9 +66,9 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
         assert call_kwargs["model"] == Models.IMAGES
         assert call_kwargs["image_format"] == "base64"
 
-        mock_join.assert_called_once()
-        mock_file.assert_called_once_with("/tmp/test-images/fake.png", "wb")
-        mock_file().write.assert_called_once_with(b"\x89PNG...")
+        mock_local_copy.assert_called_once_with(
+            "/tmp/test-images", "test-uuid-1234.png", b"\x89PNG..."
+        )
 
         assert path == "/tmp/test-images/fake.png"
         assert data == b"\x89PNG..."
@@ -92,6 +92,7 @@ def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult(
     assert result.content == b"imgdata"
     assert result.content_type == "image"
     assert result.tool_call_id == "tool-call-1"
+    assert result.metadata == {"image_reference": "/tmp/test-images/generated.png"}
 
     mock_generate_image.assert_called_once_with(
         "draw a tree",
@@ -108,3 +109,66 @@ def test_generate_image_tool_propagates_context_errors() -> None:
 
     with pytest.raises(Exception, match="has not been initialized"):
         generate_image_tool("anything", "tool-call-2")
+
+
+def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
+    fake_client = MagicMock()
+    fake_client.image.sample.return_value = SimpleNamespace(image=b"png")
+
+    upload_bytes = MagicMock()
+    get_public_url = MagicMock(return_value="https://example.test/image.png")
+    persistence_client = SimpleNamespace(
+        upload_bytes=upload_bytes,
+        get_public_url=get_public_url,
+    )
+
+    ModelContext.reset()
+    ModelContext.create(MagicMock(), "c:/tmp", persistence_client=persistence_client)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "python_chat.images.ensure_local_image_copy", lambda *_: "c:/tmp/local.png"
+    )
+
+    image_file, image_data = generate_image(
+        prompt="tree",
+        model=Models.IMAGES,
+        client=fake_client,
+        image_path="c:/tmp",
+        upload_to_storage=True,
+    )
+
+    assert image_data == b"png"
+    assert image_file == "https://example.test/image.png"
+    upload_bytes.assert_called_once()
+    get_public_url.assert_called_once()
+
+
+def test_generate_image_upload_failure_falls_back_to_local_file(
+    monkeypatch: Any,
+) -> None:
+    fake_client = MagicMock()
+    fake_client.image.sample.return_value = SimpleNamespace(image=b"png")
+
+    persistence_client = SimpleNamespace(
+        upload_bytes=MagicMock(side_effect=RuntimeError("upload failed")),
+        get_public_url=MagicMock(return_value=None),
+    )
+
+    ModelContext.reset()
+    ModelContext.create(MagicMock(), "c:/tmp", persistence_client=persistence_client)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "python_chat.images.ensure_local_image_copy",
+        lambda *_: "c:/tmp/local-fallback.png",
+    )
+
+    image_file, image_data = generate_image(
+        prompt="tree",
+        model=Models.IMAGES,
+        client=fake_client,
+        image_path="c:/tmp",
+        upload_to_storage=True,
+    )
+
+    assert image_data == b"png"
+    assert image_file == "c:/tmp/local-fallback.png"

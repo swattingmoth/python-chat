@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from python_chat.app import configure_logging, launch_app
 from python_chat.api import init_api
 from python_chat.context import ModelContext
+from python_chat.persistence import AsyncLogQueue, SupabaseClient
 from python_chat.tools import today_date
 
 if __name__ == "__main__":
@@ -27,7 +28,15 @@ if __name__ == "__main__":
         raise Exception("XAI_API_KEY environment variable is not set.")
 
     client = init_api("XAI_API_KEY", "https://api.x.ai/v1")
-    ModelContext.create(client, image_folder)
+    persistence_client = SupabaseClient()
+    log_queue = AsyncLogQueue(persistence_client)
+    ModelContext.create(
+        client,
+        image_folder,
+        persistence_client=persistence_client,
+        log_queue=log_queue,
+        user_id=persistence_client.user_id,
+    )
     ModelContext.current().register_tool(
         today_date, "Get today's date in YYYY-MM-DD format"
     )

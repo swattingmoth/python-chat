@@ -1,20 +1,26 @@
 import base64
+from datetime import datetime, timezone
 import logging
 import os
 import uuid
-from venv import logger
 
 from xai_sdk import Client
 
 from python_chat.api import Models
 from python_chat.context import ModelContext
+from python_chat.persistence import ensure_local_image_copy
 from python_chat.tools import ToolResult
 
 logger = logging.getLogger(__name__)
 
 
 def generate_image(
-    prompt: str, model: str, client: Client, image_path: str
+    prompt: str,
+    model: str,
+    client: Client,
+    image_path: str,
+    *,
+    upload_to_storage: bool = True,
 ) -> tuple[str, bytes]:
     """Generate an image using the xAI image API and save it locally.
 
@@ -46,9 +52,28 @@ def generate_image(
         image_format="base64",
     )
     image_data: bytes = image_response.image
-    image_file = os.path.join(image_path, f"{uuid.uuid4()}.png")
-    with open(image_file, "wb") as f:
-        f.write(image_data)
+    image_name = f"{uuid.uuid4()}.png"
+    image_file = ensure_local_image_copy(image_path, image_name, image_data)
+
+    model_context = ModelContext.current()
+    if upload_to_storage and model_context.persistence_client:
+        ymd = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+        remote_path = f"{ymd}/{image_name}"
+        try:
+            model_context.persistence_client.upload_bytes(
+                bucket="images",
+                path=remote_path,
+                data=image_data,
+                content_type="image/png",
+            )
+            public_url = model_context.persistence_client.get_public_url(
+                bucket="images",
+                path=remote_path,
+            )
+            if public_url:
+                image_file = public_url
+        except Exception as exc:
+            logger.warning("Image upload to storage failed: %s", exc)
 
     logger.info(f"Generated image saved to {image_file}")
 
@@ -77,4 +102,5 @@ def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
         content=image_data,
         content_type="image",
         tool_call_id=tool_call_id,
+        metadata={"image_reference": image_file},
     )

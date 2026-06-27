@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import io
+import json
 from logging import Logger
 import logging
 from typing import Any, Callable, Generator, Optional, Sequence
@@ -19,6 +21,8 @@ from xai_sdk.tools import get_tool_call_type
 
 from python_chat.api import Models
 from python_chat.context import ModelContext
+from python_chat.persistence import db
+from python_chat.persistence.models import ChatMessage, ToolCall
 from python_chat.tools import ToolResult
 from xai_sdk.proto import chat_pb2
 
@@ -165,6 +169,75 @@ class ChatInterface:
         self._completer: ChatCompleter = completer or self._default_completer
         self._tool_handler: ToolHandler = tool_handler or self._default_tool_handler
 
+    def _persist_message(
+        self,
+        *,
+        session_id: int | None,
+        role: str,
+        content: str,
+        tool_calls: list[dict[str, Any]] | None = None,
+        estimated_cost: float | None = None,
+        estimated_tokens: int | None = None,
+    ) -> int | None:
+        if not isinstance(session_id, int):
+            return None
+        if not self.modelContext.persistence_client:
+            return None
+        if not self.modelContext.persistence_client.enabled:
+            return None
+
+        try:
+            created = db.create_chat_message(
+                self.modelContext.persistence_client.rpc_client,
+                ChatMessage(
+                    session_id=session_id,
+                    role=role,
+                    content=content,
+                    tool_calls=tool_calls,
+                    estimated_tokens=estimated_tokens,
+                    estimated_cost=estimated_cost,
+                    started_at=datetime.now(timezone.utc),
+                ),
+            )
+            return created
+        except Exception as exc:
+            logger.warning("Failed to persist message: %s", exc)
+            return None
+
+    def _persist_tool_call(
+        self,
+        *,
+        message_id: int | None,
+        tool_name: str,
+        status: str,
+        input_args: dict[str, Any] | None,
+        output_result: dict[str, Any] | None,
+        error_message: str | None,
+        latency_ms: int | None,
+    ) -> None:
+        if not isinstance(message_id, int):
+            return
+        if not self.modelContext.persistence_client:
+            return
+        if not self.modelContext.persistence_client.enabled:
+            return
+
+        try:
+            db.create_tool_call(
+                self.modelContext.persistence_client.rpc_client,
+                ToolCall(
+                    message_id=message_id,
+                    tool_name=tool_name,
+                    status=status,
+                    input_args=input_args,
+                    output_result=output_result,
+                    error_message=error_message,
+                    latency_ms=latency_ms,
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Failed to persist tool call: %s", exc)
+
     def _default_completer(
         self, model: str, messages: Sequence[chat_pb2.Message], tools: list[Any]
     ) -> Generator[tuple[Response, Chunk], None, None]:
@@ -222,8 +295,23 @@ class ChatInterface:
             logger.info(f"System message:\n{system_message}")
 
         try:
+            session_id = self.modelContext.ensure_session(choice)
+
             # Add user message to history
             self.append_to_history(user(message))
+            self._persist_message(
+                session_id=session_id,
+                role="user",
+                content=message,
+            )
+            self.modelContext.enqueue_log_event(
+                {
+                    "event": "user_message",
+                    "session_id": session_id,
+                    "choice": choice,
+                    "content": message,
+                }
+            )
             local_chat_history = [
                 message_to_dict(c) for c in self.chat_history
             ]  # Create a local copy for this interaction
@@ -274,17 +362,79 @@ class ChatInterface:
                         ], self.image
 
                 # Append this turn's assistant text (if any) to history
+                assistant_message_id: int | None = None
                 if last_response:
                     assistant_message = assistant(last_response.content)
                     assistant_message.tool_calls.extend(last_response.tool_calls)
                     self.append_to_history(assistant_message)
 
+                    tool_call_dicts = [
+                        json_format.MessageToDict(tc) for tc in last_response.tool_calls
+                    ]
+                    assistant_message_id = self._persist_message(
+                        session_id=session_id,
+                        role="assistant",
+                        content=last_response.content,
+                        tool_calls=tool_call_dicts if tool_call_dicts else None,
+                        estimated_cost=last_response.cost_usd,
+                        estimated_tokens=last_response.usage.total_tokens,
+                    )
+                    self.modelContext.enqueue_log_event(
+                        {
+                            "event": "assistant_message",
+                            "session_id": session_id,
+                            "content": last_response.content,
+                            "tool_calls": tool_call_dicts,
+                            "estimated_cost": last_response.cost_usd,
+                        }
+                    )
+
                     local_chat_history.append(message_to_dict(assistant_message))
 
                 if client_tool_calls:
+                    client_tool_calls_dict = {c.id: c for c in client_tool_calls}
                     tool_results = self._tool_handler(client_tool_calls)
 
                     for tr in tool_results:
+                        tool_call_name = "unknown"
+                        tool_call_args: dict[str, Any] | None = None
+                        call = client_tool_calls_dict.get(tr.tool_call_id)
+                        if call:
+                            tool_call_name = call.function.name
+                            if call.function.arguments:
+                                try:
+                                    parsed_args = json.loads(call.function.arguments)
+                                    if isinstance(parsed_args, dict):
+                                        tool_call_args = parsed_args
+                                except json.JSONDecodeError:
+                                    tool_call_args = {"raw": call.function.arguments}
+
+                        output_payload = {
+                            "content_type": tr.content_type,
+                            "content_for_model": tr.content_for_model,
+                            "metadata": tr.metadata,
+                        }
+                        self._persist_tool_call(
+                            message_id=assistant_message_id,
+                            tool_name=tool_call_name,
+                            status="ok",
+                            input_args=tool_call_args,
+                            output_result=output_payload,
+                            error_message=None,
+                            latency_ms=None,
+                        )
+                        self.modelContext.enqueue_log_event(
+                            {
+                                "event": "tool_call",
+                                "session_id": session_id,
+                                "message_id": assistant_message_id,
+                                "tool_name": tool_call_name,
+                                "status": "ok",
+                                "tool_call_id": tr.tool_call_id,
+                                "output": output_payload,
+                            }
+                        )
+
                         if is_image_mode:
                             # Side-effect: capture image ToolResult for "Generate Image" mode
                             if tr and tr.content_type == "image" and tr.content:

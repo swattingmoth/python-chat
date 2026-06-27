@@ -27,6 +27,7 @@ class ToolResult:
     content: Any
     tool_call_id: str
     content_type: str = "text"
+    metadata: dict[str, Any] | None = None
 
     def __str__(self) -> str:
         # Convert content to string and slice first 100 characters

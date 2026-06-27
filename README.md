@@ -124,6 +124,9 @@ uv run python -c "from python_chat import hello_world; print(hello_world())"
    ```
    XAI_API_KEY=your_xai_key_here
    IMAGE_FOLDER=c:/temp/images   # or any writable dir; will be created if needed
+   SUPABASE_URL=https://<project-ref>.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+   SUPABASE_AUTH_USER_ID=<auth.users.id uuid>   # required for session/message RLS writes
    ```
 
 2. Launch:
@@ -144,6 +147,8 @@ The UI lets you choose modes:
 - **Generate Image**: registers the image gen tool; model can call it, result displays below chat
 
 Images are saved as UUID-named PNGs under `IMAGE_FOLDER`.
+If Supabase env vars are configured, image bytes are also uploaded to the `images`
+storage bucket and detailed chat logs are batched to `chat-logs` as JSONL.
 
 ## Architecture & Extending
 
@@ -154,6 +159,14 @@ Images are saved as UUID-named PNGs under `IMAGE_FOLDER`.
 - **Testing**: All public functions/classes have tests. Use dependency injection of `completer` / `tool_handler` in `ChatInterface` and `ModelContext` to avoid real API calls. Fakes in `test_chat.py` yield `(response, chunk)` pairs to match the `ChatCompleter` protocol.
 - **Type safety**: `mypy --strict` enforced. Third-party `xai_sdk` lacks types, so `pyproject.toml` has `[[tool.mypy.overrides]]` ignore for it.
 - To add new tools or modes: implement in a module, register in `chatbot.py` or `app.py`, add test mirroring `src/`, ensure `uv run pytest -q && uv run mypy src` pass.
+
+### TODO
+
+- Refactor runtime state for multi-user safety: user-specific values (chat history, model/mode selection, user/session identifiers, and transient image state) must live in Gradio session state or an external shared store, not in process-global singleton fields.
+- Chat session is not updated to compute and store title
+- Logging relies on existence of c:\temp and would not be accessable when running on server
+- ensuring local image would likely fail on server
+- every message logged to supabase is in a separate file. The file should contain all logs for a user session. The name of the file should also have meaning. For example, user_id and timestamp
 
 See `.github/copilot-instructions.md` for full development rules.
 

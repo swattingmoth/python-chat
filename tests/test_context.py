@@ -6,7 +6,10 @@ validation, and error cases. Uses mocks for xAI Client; reset() between tests.
 
 from __future__ import annotations
 
-from typing import Generator
+from collections.abc import Generator
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -159,3 +162,78 @@ def test_model_context_complex_questions_adds_additional_tools() -> None:
 
     ctx.model_name = Models.QUESTIONS
     assert ctx.get_tools_for_model() == []
+
+
+def test_setters_and_session_short_circuit_paths() -> None:
+    ctx = ModelContext.create(MagicMock(), "c:/tmp")
+    ctx.set_log_queue(None)
+    ctx.set_user_id("u")
+    assert ctx.user_id == "u"
+
+    # Existing session for same mode returns cached id.
+    ctx._session_id = 123
+    ctx._session_mode = "Question"
+    assert ctx.ensure_session("Question") == 123
+
+
+def test_ensure_session_none_when_missing_dependencies() -> None:
+    ctx = ModelContext.create(MagicMock(), "c:/tmp")
+
+    ctx._persistence_client = None
+    assert ctx.ensure_session("Question") is None
+
+    ctx._persistence_client = SimpleNamespace(enabled=False)  # type: ignore[assignment]
+    assert ctx.ensure_session("Question") is None
+
+    ctx._persistence_client = SimpleNamespace(enabled=True, rpc_client=object())  # type: ignore[assignment]
+    ctx._user_id = None
+    assert ctx.ensure_session("Question") is None
+
+
+def test_ensure_session_success_and_exception(monkeypatch: Any) -> None:
+    ctx = ModelContext.create(MagicMock(), "c:/tmp")
+    ctx._persistence_client = SimpleNamespace(enabled=True, rpc_client=object())  # type: ignore[assignment]
+    ctx._user_id = "user-1"
+
+    create_chat_session = MagicMock(return_value=777)
+    monkeypatch.setattr(
+        "python_chat.context.db.create_chat_session", create_chat_session
+    )
+
+    assert ctx.ensure_session("Question") == 777
+
+    create_chat_session.side_effect = RuntimeError("db")
+    ctx._session_id = None
+    assert ctx.ensure_session("Question") is None
+
+
+def test_complete_session_paths(monkeypatch: Any) -> None:
+    ctx = ModelContext.create(MagicMock(), "c:/tmp")
+
+    ctx._persistence_client = None
+    ctx.complete_session()
+
+    ctx._persistence_client = SimpleNamespace(enabled=True, rpc_client=object())  # type: ignore[assignment]
+    ctx._session_id = None
+    ctx.complete_session()
+
+    complete_chat_session = MagicMock()
+    monkeypatch.setattr(
+        "python_chat.context.db.complete_chat_session", complete_chat_session
+    )
+
+    ctx._session_id = 9
+    ctx.complete_session()
+    assert complete_chat_session.called
+
+    complete_chat_session.side_effect = RuntimeError("fail")
+    ctx.complete_session()
+
+
+def test_enqueue_log_event_enqueues_when_queue_present() -> None:
+    enqueue = MagicMock()
+    ctx = ModelContext.create(MagicMock(), "c:/tmp")
+    ctx._log_queue = SimpleNamespace(enqueue=enqueue)  # type: ignore[assignment]
+
+    ctx.enqueue_log_event({"event": "x"})
+    enqueue.assert_called_once()

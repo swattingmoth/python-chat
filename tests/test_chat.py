@@ -56,7 +56,12 @@ def _make_chunk(content: str | None = None, tool_calls: list[Any] | None = None)
     For tool_calls we accept either real protos or SimpleNamespace (the loop only
     reads .type via get_tool_call_type and .function.name for the Calling metadata).
     """
-    return SimpleNamespace(content=content, tool_calls=tool_calls or [])
+    return SimpleNamespace(
+        content=content,
+        tool_calls=tool_calls or [],
+        cost_usd=0.0,
+        usage=SimpleNamespace(total_tokens=0),
+    )
 
 
 def _make_response(content: str = "", tool_calls: list[Any] | None = None) -> Any:
@@ -65,7 +70,12 @@ def _make_response(content: str = "", tool_calls: list[Any] | None = None) -> An
     tool_calls here should be real chat_pb2.ToolCall when simulating tool turns
     (see _make_tool_call) so that extend onto assistant proto succeeds.
     """
-    return SimpleNamespace(content=content, tool_calls=tool_calls or [])
+    return SimpleNamespace(
+        content=content,
+        tool_calls=tool_calls or [],
+        cost_usd=0.0,
+        usage=SimpleNamespace(total_tokens=0),
+    )
 
 
 def make_text_only_stream(text: str) -> list[tuple[Any, Any]]:
@@ -158,6 +168,9 @@ def mock_context() -> MagicMock:
     """ModelContext double that only needs get_tools_for_model for chat()."""
     ctx = MagicMock()
     ctx.get_tools_for_model.return_value = []
+    ctx.ensure_session.return_value = None
+    ctx.persistence_client = None
+    ctx.enqueue_log_event.return_value = None
     return ctx
 
 

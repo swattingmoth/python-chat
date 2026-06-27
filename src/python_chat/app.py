@@ -1,3 +1,4 @@
+import atexit
 import datetime
 import logging
 from math import log
@@ -8,6 +9,7 @@ import gradio as gr
 from python_chat.chat import ChatInterface
 from python_chat.context import ModelContext
 from python_chat.images import generate_image_tool
+from python_chat.persistence import start_log_worker
 
 
 def configure_logging(
@@ -31,7 +33,22 @@ def configure_logging(
 
 def launch_app() -> gr.Blocks:
     """Launch the Gradio Blocks interface."""
-    chat_interface = ChatInterface(ModelContext.current())
+    model_context = ModelContext.current()
+    chat_interface = ChatInterface(model_context)
+
+    if model_context.log_queue:
+        start_log_worker(model_context.log_queue)
+
+        def _shutdown_persistence() -> None:
+            model_context.complete_session()
+            if not model_context.log_queue:
+                return
+            try:
+                model_context.log_queue.stop()
+            except RuntimeError:
+                pass
+
+        atexit.register(_shutdown_persistence)
 
     with gr.Blocks(title="AI Assistant") as demo:
         gr.Markdown("# AI Assistant")
@@ -45,6 +62,7 @@ def launch_app() -> gr.Blocks:
             )
 
         chatbot = gr.Chatbot(label="Chat", height=400)
+        session_state = gr.State(value={"session_id": model_context.session_id})
 
         image_output = gr.Image(label="Generated Image", visible=False, type="pil")
 
@@ -74,27 +92,39 @@ def launch_app() -> gr.Blocks:
         choice.change(fn=on_choice_change, inputs=choice, outputs=image_output)
 
         def handle_submit(
-            message: str, chat_history: list[dict[str, Any]], selected_choice: str
-        ) -> Generator[tuple[list[dict[str, Any]], str, Optional[bytes]], None, None]:
+            message: str,
+            chat_history: list[dict[str, Any]],
+            selected_choice: str,
+            state: dict[str, Any],
+        ) -> Generator[
+            tuple[list[dict[str, Any]], str, Optional[bytes], dict[str, Any]],
+            None,
+            None,
+        ]:
             """Handle message submission."""
             if not message:
-                yield chat_history, "", None
+                yield chat_history, "", None, state
                 return
 
             for updated_history, image_data in chat_interface.chat(
                 message, chat_history, selected_choice
             ):
-                yield updated_history, "", image_data
+                updated_state = {
+                    "session_id": model_context.session_id,
+                }
+                yield updated_history, "", image_data, updated_state
 
-        def handle_clear() -> tuple[list[dict[str, Any]], str, Optional[bytes]]:
+        def handle_clear() -> (
+            tuple[list[dict[str, Any]], str, Optional[bytes], dict[str, Any]]
+        ):
             """Handle clear button."""
             cleared_history = chat_interface.clear_history()
-            return cleared_history, "", None
+            return cleared_history, "", None, {"session_id": model_context.session_id}
 
         submit_event = {
             "fn": handle_submit,
-            "inputs": [message_input, chatbot, choice],
-            "outputs": [chatbot, message_input, image_output],
+            "inputs": [message_input, chatbot, choice, session_state],
+            "outputs": [chatbot, message_input, image_output, session_state],
         }
 
         # Submit on button click
@@ -104,6 +134,9 @@ def launch_app() -> gr.Blocks:
         message_input.submit(**submit_event)  # type: ignore[arg-type]
 
         # Clear button
-        clear_btn.click(fn=handle_clear, outputs=[chatbot, message_input, image_output])
+        clear_btn.click(
+            fn=handle_clear,
+            outputs=[chatbot, message_input, image_output, session_state],
+        )
 
     return cast(gr.Blocks, demo)
