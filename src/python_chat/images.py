@@ -83,13 +83,12 @@ def generate_image(
 def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
     """Tool function to generate an image."""
     model_context = ModelContext.current()
-    with model_context.use_model(Models.IMAGES):
-        image_file, image_data = generate_image(
-            prompt,
-            model_context.model_name,
-            model_context.client,
-            model_context.image_path,
-        )
+    image_file, image_data = generate_image(
+        prompt,
+        Models.IMAGES,
+        model_context.client,
+        model_context.image_path,
+    )
     # uncomment below to test with a static image instead of generating a new one each time.
     # with open(
     #     r"C:\Users\jordan-dev\model_output\images\5e6305fa-e54d-496b-b742-6f49ba5f1e45.png",

@@ -89,10 +89,22 @@ class _FakeChatInterface:
         self.model_context = model_context
 
     def chat(
-        self, message: str, chat_history: list[dict[str, Any]], choice: str
-    ) -> Generator[tuple[list[dict[str, Any]], bytes | None], None, None]:
+        self,
+        message: str,
+        chat_history: list[dict[str, Any]],
+        choice: str,
+        *,
+        runtime: dict[str, Any] | None = None,
+    ) -> Generator[
+        tuple[list[dict[str, Any]], bytes | None, dict[str, Any]], None, None
+    ]:
         del choice
-        yield chat_history + [{"role": "assistant", "content": f"echo:{message}"}], None
+        resolved_runtime = runtime or {}
+        yield (
+            chat_history + [{"role": "assistant", "content": f"echo:{message}"}],
+            None,
+            resolved_runtime,
+        )
 
     def clear_history(self) -> list[dict[str, Any]]:
         return []
@@ -117,10 +129,12 @@ def test_configure_logging_supports_defaults_and_file_only(monkeypatch: Any) -> 
 def test_launch_app_registers_handlers_and_executes_callbacks(monkeypatch: Any) -> None:
     fake_gr = _FakeGr()
     model_context = SimpleNamespace(
-        session_id=77,
+        user_id="user-1",
+        persistence_client=None,
         log_queue=None,
         register_tool=MagicMock(),
         remove_tool=MagicMock(),
+        complete_session_for=MagicMock(),
         complete_session=MagicMock(),
     )
 
@@ -133,25 +147,40 @@ def test_launch_app_registers_handlers_and_executes_callbacks(monkeypatch: Any) 
     assert isinstance(demo, _FakeBlocks)
 
     on_choice_change = fake_gr.registry["change"][0]["fn"]
-    show = on_choice_change("Generate Image")
-    hide = on_choice_change("Question")
+    show, show_state = on_choice_change("Generate Image", {})
+    hide, hide_state = on_choice_change("Question", {})
     assert show == {"visible": True}
     assert hide == {"visible": False}
-    model_context.register_tool.assert_called_once()
-    model_context.remove_tool.assert_called_once()
+    assert show_state["selected_choice"] == "Generate Image"
+    assert hide_state["selected_choice"] == "Question"
+
+    # Verify per-session tool isolation: active_tools should be in state, not global registry
+    assert "active_tools" in show_state
+    assert "active_tools" in hide_state
+    assert (
+        len(show_state["active_tools"]) > 1
+    )  # Generate Image includes base + image tools
+    assert len(hide_state["active_tools"]) == 1  # Question includes base tools only
+
+    # Global registry should NOT have been called (tools are now per-session)
+    model_context.register_tool.assert_not_called()
+    model_context.remove_tool.assert_not_called()
 
     submit_fn = fake_gr.registry["click"][0]["fn"]
     empty_turns = list(
         submit_fn("", [{"role": "user", "content": "old"}], "Question", {})
     )
-    assert empty_turns == [([{"role": "user", "content": "old"}], "", None, {})]
+    assert empty_turns[0][0] == [{"role": "user", "content": "old"}]
+    assert empty_turns[0][1] == ""
+    assert empty_turns[0][2] is None
+    assert empty_turns[0][3]["selected_choice"] == "Question"
 
     msg_turns = list(submit_fn("hello", [], "Question", {}))
     assert msg_turns[-1][0][-1]["content"] == "echo:hello"
-    assert msg_turns[-1][3] == {"session_id": 77}
+    assert msg_turns[-1][3]["selected_choice"] == "Question"
 
     clear_fn = fake_gr.registry["click"][1]["fn"]
-    assert clear_fn() == ([], "", None, {"session_id": 77})
+    assert clear_fn({"selected_choice": "Question"})[0] == []
 
 
 def test_launch_app_registers_shutdown_when_log_queue_exists(monkeypatch: Any) -> None:
@@ -162,10 +191,12 @@ def test_launch_app_registers_shutdown_when_log_queue_exists(monkeypatch: Any) -
             return None
 
     model_context = SimpleNamespace(
-        session_id=42,
+        user_id="user-1",
+        persistence_client=None,
         log_queue=_FakeQueue(),
         register_tool=MagicMock(),
         remove_tool=MagicMock(),
+        complete_session_for=MagicMock(),
         complete_session=MagicMock(),
     )
     registered: list[Callable[[], None]] = []
@@ -191,10 +222,12 @@ def test_launch_app_shutdown_handles_runtime_error(monkeypatch: Any) -> None:
             raise RuntimeError("stop failed")
 
     model_context = SimpleNamespace(
-        session_id=1,
+        user_id="user-1",
+        persistence_client=None,
         log_queue=_FakeQueue(),
         register_tool=MagicMock(),
         remove_tool=MagicMock(),
+        complete_session_for=MagicMock(),
         complete_session=MagicMock(),
     )
     registered: list[Callable[[], None]] = []

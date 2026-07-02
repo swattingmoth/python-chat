@@ -49,18 +49,14 @@ def test_default_completer_yields_stream_pairs() -> None:
     assert out == fake_stream
 
 
-def test_default_tool_handler_delegates_to_model_context() -> None:
+def test_default_tool_handler_uses_provided_active_tools() -> None:
     model_context = MagicMock()
-    model_context.handle_tool_calls.return_value = [
-        ToolResult(content_for_model="x", content="x", tool_call_id="id")
-    ]
     iface = ChatInterface(model_context)
 
     calls = [chat_pb2.ToolCall(id="id")]
-    result = iface._default_tool_handler(calls)
+    result = iface._default_tool_handler([], calls)
 
-    assert result[0].tool_call_id == "id"
-    model_context.handle_tool_calls.assert_called_once_with(calls)
+    assert result == []
 
 
 def test_persist_message_handles_guard_and_success_and_exception(

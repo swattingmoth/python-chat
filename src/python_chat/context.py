@@ -12,7 +12,7 @@ from xai_sdk.proto import chat_pb2
 from python_chat.api import Models
 from python_chat.persistence import AsyncLogQueue, SupabaseClient, build_log_event, db
 from python_chat.persistence.models import ChatSession
-from python_chat.tools import Tools, ToolResult
+from python_chat.tools import RegisteredTool, Tools, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,6 @@ class ModelContext:
         self.model_name = Models.QUESTIONS
         self._client = client
         self._image_path = image_path
-        self._tools = Tools()
         self._additional_tools: list[Any] = []
         self._persistence_client = persistence_client
         self._log_queue = log_queue
@@ -131,9 +130,9 @@ class ModelContext:
         return self._image_path
 
     @property
-    def tools(self) -> "Tools":
-        """Get the registered tool manager."""
-        return self._tools
+    def tools(self) -> type[Tools]:
+        """Get the stateless tool helper class."""
+        return Tools
 
     @property
     def persistence_client(self) -> SupabaseClient | None:
@@ -159,55 +158,81 @@ class ModelContext:
 
     def ensure_session(self, mode: str) -> int | None:
         """Ensure a chat session exists in the database for the current user and mode."""
-        if self._session_id is not None and self._session_mode == mode:
-            return self._session_id
+        session_id, session_mode = self.ensure_session_for(
+            mode=mode,
+            user_id=self._user_id,
+            current_session_id=self._session_id,
+            current_session_mode=self._session_mode,
+        )
+        self._session_id = session_id
+        self._session_mode = session_mode
+        return session_id
+
+    def ensure_session_for(
+        self,
+        *,
+        mode: str,
+        user_id: str | None,
+        current_session_id: int | None,
+        current_session_mode: str | None,
+    ) -> tuple[int | None, str | None]:
+        """Resolve or create a chat session for explicit per-request state."""
+        if current_session_id is not None and current_session_mode == mode:
+            return current_session_id, current_session_mode
 
         if not self._persistence_client or not self._persistence_client.enabled:
-            return None
+            return None, current_session_mode
 
-        if not self._user_id:
-            return None
+        if not user_id:
+            return None, current_session_mode
 
         try:
-            created_session = ChatSession(user_id=self._user_id, mode=mode)
+            created_session = ChatSession(user_id=user_id, mode=mode)
             new_session_id = db.create_chat_session(
                 self._persistence_client.rpc_client,
                 created_session,
             )
-            self._session_id = new_session_id
-            self._session_mode = mode
-            return new_session_id
+            return new_session_id, mode
         except Exception as exc:
             logger.warning("Failed to create session: %s", exc)
-            return None
+            return None, current_session_mode
 
     def complete_session(self) -> None:
+        self.complete_session_for(self._session_id)
+
+    def complete_session_for(self, session_id: int | None) -> None:
         if not self._persistence_client or not self._persistence_client.enabled:
             return
-        if self._session_id is None:
+        if session_id is None:
             return
 
         try:
             db.complete_chat_session(
                 self._persistence_client.rpc_client,
-                self._session_id,
+                session_id,
                 datetime.now(timezone.utc).isoformat(),
             )
         except Exception as exc:
-            logger.warning("Failed to complete session %s: %s", self._session_id, exc)
+            logger.warning("Failed to complete session %s: %s", session_id, exc)
 
     def enqueue_log_event(self, payload: dict[str, Any]) -> None:
+        self.enqueue_log_event_for(self._session_id, payload)
+
+    def enqueue_log_event_for(
+        self, session_id: int | None, payload: dict[str, Any]
+    ) -> None:
         if not self._log_queue:
             return
-        self._log_queue.enqueue(build_log_event(self._session_id, payload))
+        self._log_queue.enqueue(build_log_event(session_id, payload))
 
     def register_tool(
         self,
+        active_tools: list[RegisteredTool],
         func: Callable[..., Any],
         description: Optional[str] = None,
         name: Optional[str] = None,
         max_turns: Optional[int] = None,
-    ) -> None:
+    ) -> list[RegisteredTool]:
         """Register a callable as a tool for the LLM to use.
 
         Args:
@@ -216,23 +241,29 @@ class ModelContext:
             name: Optional name override (defaults to func.__name__).
             max_turns: Optional maximum number of times the tool can be called.
         """
-        self._tools.register_tool(
-            func, description=description, name=name, max_turns=max_turns
+        return Tools.register_tool(
+            active_tools,
+            func,
+            description=description,
+            name=name,
+            max_turns=max_turns,
         )
 
-    def remove_tool(self, func: Callable[..., Any]) -> None:
+    def remove_tool(
+        self, active_tools: list[RegisteredTool], func: Callable[..., Any]
+    ) -> list[RegisteredTool]:
         """Remove a registered tool from the tool registry."""
-        self._tools.remove_tool(func)
+        return Tools.remove_tool(active_tools, func)
 
     def handle_tool_calls(
-        self, tool_calls: list[chat_pb2.ToolCall]
+        self, active_tools: list[RegisteredTool], tool_calls: list[chat_pb2.ToolCall]
     ) -> list[ToolResult]:
         """Execute tool calls requested by the model and return their responses."""
-        return self._tools.handle_tool_calls(tool_calls)
+        return Tools.handle_tool_calls(active_tools, tool_calls)
 
-    def get_tools_for_model(self) -> list[Any]:
+    def get_tools_for_model(self, active_tools: list[RegisteredTool]) -> list[Any]:
         """Return the tool objects (xai chat tool protos) formatted for model use."""
-        return self._tools.get_tools_for_model(self._additional_tools)
+        return Tools.get_tools_for_model(active_tools, self._additional_tools)
 
     @contextmanager
     def use_model(self, model_name: str) -> Generator[None, None, None]:

@@ -1,21 +1,24 @@
 import atexit
 import datetime
 import logging
-from math import log
+import os
 from typing import Any, Generator, Optional, cast
 
 import gradio as gr
+from PIL import Image
 
-from python_chat.chat import ChatInterface
+from python_chat.chat import ChatInterface, SessionRuntime, get_model_for_choice
 from python_chat.context import ModelContext
 from python_chat.images import generate_image_tool
 from python_chat.persistence import start_log_worker
+from python_chat.tools import RegisteredTool, Tools, today_date
+
+logger = logging.getLogger(__name__)
 
 
 def configure_logging(
     logfile_path: Optional[str] = None, log_to_console: bool = True
 ) -> None:
-
     if not logfile_path:
         tdy = datetime.date.today().strftime("%Y-%m-%d")
         logfile_path = rf"c:\temp\chatbot_logs\chatbot_{tdy}.log"
@@ -31,10 +34,95 @@ def configure_logging(
     )
 
 
+def get_tools_for_choice(choice: str) -> list[RegisteredTool]:
+    """Compute the active tools for a given choice (per-session).
+
+    Args:
+        choice: The selected choice from the dropdown.
+
+    Returns:
+        A list of tool callables that should be active for this choice.
+    """
+    tools: list[RegisteredTool] = []
+    tools = Tools.register_tool(
+        tools,
+        today_date,
+        description="Get today's date in YYYY-MM-DD format",
+    )
+    if choice == "Generate Image":
+        tools = Tools.register_tool(
+            tools,
+            generate_image_tool,
+            description=(
+                "Generate an image from a user prompt. "
+                "Returns image bytes plus metadata for model follow-up."
+            ),
+            name="generate_image",
+            max_turns=1,
+        )
+    return tools
+
+
 def launch_app() -> gr.Blocks:
     """Launch the Gradio Blocks interface."""
     model_context = ModelContext.current()
     chat_interface = ChatInterface(model_context)
+
+    def resolve_user_id(
+        state: SessionRuntime | dict[str, Any] | None = None,
+    ) -> str | None:
+        # Priority 1: Session state
+        if state is not None:
+            user_id = state.get("user_id")
+            if isinstance(user_id, str) or user_id is None:
+                return user_id
+
+        # Priority 2: Supabase Python library (authenticated user from SDK)
+        persistence_client = model_context.persistence_client
+        if persistence_client and persistence_client.rpc_client:
+            try:
+                user = persistence_client.rpc_client.auth.get_user()
+                if user and hasattr(user, "id") and isinstance(user.id, str):
+                    return user.id
+            except Exception as exc:
+                logger.debug("Failed to get user from Supabase SDK: %s", exc)
+
+        # Priority 3: Environment variable fallback
+        env_user_id = os.getenv("SUPABASE_AUTH_USER_ID")
+        return env_user_id if env_user_id else None
+
+    def build_default_runtime(choice: str = "Question") -> SessionRuntime:
+        return {
+            "user_id": resolve_user_id(),
+            "session_id": None,
+            "session_mode": None,
+            "selected_choice": choice,
+            "model_name": get_model_for_choice(choice),
+            "request_counter": 0,
+            "active_tools": get_tools_for_choice(choice),
+        }
+
+    def ensure_runtime(state: SessionRuntime, choice: str) -> SessionRuntime:
+        merged = build_default_runtime(choice)
+        merged["user_id"] = resolve_user_id(state)
+
+        session_id = state.get("session_id")
+        if isinstance(session_id, int) or session_id is None:
+            merged["session_id"] = session_id
+
+        session_mode = state.get("session_mode")
+        if isinstance(session_mode, str) or session_mode is None:
+            merged["session_mode"] = session_mode
+
+        request_counter = state.get("request_counter")
+        if isinstance(request_counter, int):
+            merged["request_counter"] = request_counter
+
+        merged["selected_choice"] = choice
+        merged["model_name"] = get_model_for_choice(choice)
+        merged["active_tools"] = get_tools_for_choice(choice)
+        merged["request_counter"] = int(merged.get("request_counter", 0)) + 1
+        return merged
 
     if model_context.log_queue:
         start_log_worker(model_context.log_queue)
@@ -62,7 +150,7 @@ def launch_app() -> gr.Blocks:
             )
 
         chatbot = gr.Chatbot(label="Chat", height=400)
-        session_state = gr.State(value={"session_id": model_context.session_id})
+        session_state = gr.State(value=build_default_runtime())
 
         image_output = gr.Image(label="Generated Image", visible=False, type="pil")
 
@@ -76,50 +164,55 @@ def launch_app() -> gr.Blocks:
             submit_btn = gr.Button("Submit", variant="primary")
             clear_btn = gr.Button("Clear")
 
-        def on_choice_change(selected_choice: str) -> dict[str, Any]:
-            """Update image visibility based on choice."""
-            if selected_choice == "Generate Image":
-                ModelContext.current().register_tool(
-                    generate_image_tool,
-                    "Generate an image based on a text prompt",
-                    max_turns=1,
-                )
-            else:
-                ModelContext.current().remove_tool(generate_image_tool)
+        def on_choice_change(
+            selected_choice: str, state: SessionRuntime
+        ) -> tuple[dict[str, Any], SessionRuntime]:
+            """Update image visibility based on choice (no longer mutates global tool registry)."""
+            runtime = ensure_runtime(state, selected_choice)
+            return gr.update(visible=(selected_choice == "Generate Image")), runtime
 
-            return gr.update(visible=(selected_choice == "Generate Image"))
-
-        choice.change(fn=on_choice_change, inputs=choice, outputs=image_output)
+        choice.change(
+            fn=on_choice_change,
+            inputs=[choice, session_state],
+            outputs=[image_output, session_state],
+        )
 
         def handle_submit(
             message: str,
             chat_history: list[dict[str, Any]],
             selected_choice: str,
-            state: dict[str, Any],
+            state: SessionRuntime,
         ) -> Generator[
-            tuple[list[dict[str, Any]], str, Optional[bytes], dict[str, Any]],
+            tuple[list[dict[str, Any]], str, Optional[Image.Image], SessionRuntime],
             None,
             None,
         ]:
             """Handle message submission."""
+            runtime = ensure_runtime(state, selected_choice)
             if not message:
-                yield chat_history, "", None, state
+                yield chat_history, "", None, runtime
                 return
 
-            for updated_history, image_data in chat_interface.chat(
-                message, chat_history, selected_choice
+            for updated_history, image_data, updated_runtime in chat_interface.chat(
+                message,
+                chat_history,
+                selected_choice,
+                runtime=runtime,
             ):
-                updated_state = {
-                    "session_id": model_context.session_id,
-                }
-                yield updated_history, "", image_data, updated_state
+                yield updated_history, "", image_data, updated_runtime
 
-        def handle_clear() -> (
-            tuple[list[dict[str, Any]], str, Optional[bytes], dict[str, Any]]
-        ):
+        def handle_clear(
+            state: SessionRuntime,
+        ) -> tuple[list[dict[str, Any]], str, Optional[Image.Image], SessionRuntime]:
             """Handle clear button."""
+            runtime = ensure_runtime(state, state.get("selected_choice", "Question"))
+            if runtime.get("session_id") is not None:
+                model_context.complete_session_for(runtime.get("session_id"))
+
             cleared_history = chat_interface.clear_history()
-            return cleared_history, "", None, {"session_id": model_context.session_id}
+            runtime["session_id"] = None
+            runtime["session_mode"] = None
+            return cleared_history, "", None, runtime
 
         submit_event = {
             "fn": handle_submit,
@@ -127,15 +220,12 @@ def launch_app() -> gr.Blocks:
             "outputs": [chatbot, message_input, image_output, session_state],
         }
 
-        # Submit on button click
         submit_btn.click(**submit_event)  # type: ignore[arg-type]
-
-        # Submit on Enter key (textbox submission)
         message_input.submit(**submit_event)  # type: ignore[arg-type]
 
-        # Clear button
         clear_btn.click(
             fn=handle_clear,
+            inputs=[session_state],
             outputs=[chatbot, message_input, image_output, session_state],
         )
 

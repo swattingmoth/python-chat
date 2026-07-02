@@ -255,7 +255,8 @@ def test_chat_does_nothing_and_returns_history_when_message_empty(
 
     # The early "return foo, bar" in a generator does not yield; list() gets [].
     # (The production caller in app.py guards the empty case before ever calling chat().)
-    assert result == [(initial_history, None)]
+    assert result[0][0] == initial_history
+    assert result[0][1] is None
     assert iface.chat_history == []  # unchanged because early return before append
 
 
@@ -272,14 +273,14 @@ def test_chat_streams_single_simple_response_and_updates_history(
 
     # First yield: user appended + thinking placeholder assistant entry
     assert len(yields) >= 2
-    first_history, _ = yields[0]
+    first_history, _, _ = yields[0]
     assert first_history[-2]["role"] == "user"
     thinking = first_history[-1]
     assert thinking["role"] == "assistant"
     assert "Thinking" in thinking.get("metadata", {}).get("title", "")
 
     # Last yield should have the full assistant response
-    final_history, final_img = yields[-1]
+    final_history, final_img, _ = yields[-1]
     assert final_img is None
     assistant_msgs = [h for h in final_history if h["role"] == "assistant"]
     assert len(assistant_msgs) == 1
@@ -309,7 +310,7 @@ def test_chat_multiple_turns_accumulates_history_correctly(
     assert roles == ["user", "assistant", "user", "assistant"]
 
     # The last yield of second turn contains the latest assistant message
-    last_hist, _ = yields2[-1]
+    last_hist, _, _ = yields2[-1]
     assert "Second answer" in last_hist[-1]["content"]
 
 
@@ -351,7 +352,7 @@ def test_chat_handles_tool_call_and_continues_for_non_image_tool(
     # metadata entry was produced for the tool turn.
     calling_found = any(
         any("Calling" in (h.get("metadata", {}) or {}).get("title", "") for h in hist)
-        for hist, _ in yields
+        for hist, _, _ in yields
     )
     assert calling_found
 
@@ -389,7 +390,7 @@ def test_chat_tool_call_to_generate_image_sets_image_and_stops(
     assert iface.image.size == (4, 4)
 
     # Final yield must carry the image
-    final_hist, final_img = yields[-1]
+    final_hist, final_img, _ = yields[-1]
     assert final_img is iface.image
     # The preceding text from model should be present (check internal history after consumption
     # as it is mutated by appends that happen after the tool_result yield snapshot).
@@ -423,7 +424,7 @@ def test_chat_catches_exception_and_yields_generic_error(
     )
 
     # Last yield contains the error
-    last_hist, _ = yields[-1]
+    last_hist, _, _ = yields[-1]
     assert "error" in last_hist[-1]["content"].lower()
 
 
@@ -472,8 +473,8 @@ def test_chat_handles_multiple_parallel_tool_calls(
     _ = list(iface.chat("Use two tools", [], "Question"))
 
     handler.assert_called_once()  # type: ignore[attr-defined]
-    # The arg passed to handler is the list[ToolCall] directly (from last_response.tool_calls)
-    call_arg = handler.call_args[0][0]  # type: ignore[attr-defined]
+    # Handler now receives (active_tools, tool_calls).
+    call_arg = handler.call_args[0][1]  # type: ignore[attr-defined]
     assert len(call_arg) == 2
     assert call_arg[0].id == "call_a"
     assert call_arg[1].function.arguments == '{"x":1}'

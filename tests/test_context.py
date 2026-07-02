@@ -54,7 +54,7 @@ def test_model_context_properties_and_model_name_setter() -> None:
     assert ctx.model_name == Models.QUESTIONS
     assert ctx.client is fake_client
     assert ctx.image_path == "/p"
-    assert isinstance(ctx.tools, Tools)
+    assert ctx.tools is Tools
 
     # change model
     ctx.model_name = Models.COMPLEX_QUESTIONS
@@ -73,18 +73,17 @@ def test_model_context_register_remove_tool_delegates_to_tools() -> None:
     def my_tool(x: str) -> str:
         return x
 
-    ctx.register_tool(my_tool, "does x")
-    assert "my_tool" in ctx.tools.tools
+    active_tools = ctx.register_tool([], my_tool, "does x")
+    assert len(active_tools) == 1
+    assert active_tools[0]["name"] == "my_tool"
 
-    formatted = ctx.get_tools_for_model()
+    formatted = ctx.get_tools_for_model(active_tools)
     assert len(formatted) == 1
-    # get_tools_for_model now returns xai tool protos (or dicts for tests)
-    # We only assert presence of the registered tool name via the internal registry
-    assert "my_tool" in ctx.tools.tools
+    assert formatted[0].function.name == "my_tool"
 
-    ctx.remove_tool(my_tool)
-    assert "my_tool" not in ctx.tools.tools
-    assert ctx.get_tools_for_model() == []
+    active_tools = ctx.remove_tool(active_tools, my_tool)
+    assert active_tools == []
+    assert ctx.get_tools_for_model(active_tools) == []
 
 
 def test_model_context_handle_tool_calls_delegates() -> None:
@@ -95,7 +94,7 @@ def test_model_context_handle_tool_calls_delegates() -> None:
     def echo(s: str) -> str:
         return s
 
-    ctx.register_tool(echo, "echo")
+    active_tools = ctx.register_tool([], echo, "echo")
 
     tool_calls = [
         chat_pb2.ToolCall(
@@ -107,7 +106,7 @@ def test_model_context_handle_tool_calls_delegates() -> None:
         )
     ]
 
-    results = ctx.handle_tool_calls(tool_calls)
+    results = ctx.handle_tool_calls(active_tools, tool_calls)
 
     assert len(results) == 1
     assert results[0].content == "hi"
@@ -151,17 +150,17 @@ def test_model_context_complex_questions_adds_additional_tools() -> None:
     fake_client = MagicMock()
     ctx = ModelContext.create(fake_client, "/p")
 
-    assert ctx.get_tools_for_model() == []  # no additional tools for QUESTIONS
+    assert ctx.get_tools_for_model([]) == []  # no additional tools for QUESTIONS
 
     ctx.model_name = Models.COMPLEX_QUESTIONS
-    tools = ctx.get_tools_for_model()
+    tools = ctx.get_tools_for_model([])
     # For COMPLEX we now return both native server-side tools.
     assert len(tools) == 2
     assert any(tool.HasField("web_search") for tool in tools)
     assert any(tool.HasField("code_execution") for tool in tools)
 
     ctx.model_name = Models.QUESTIONS
-    assert ctx.get_tools_for_model() == []
+    assert ctx.get_tools_for_model([]) == []
 
 
 def test_setters_and_session_short_circuit_paths() -> None:

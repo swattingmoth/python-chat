@@ -162,11 +162,12 @@ storage bucket and detailed chat logs are batched to `chat-logs` as JSONL.
 
 ### TODO
 
-- Refactor runtime state for multi-user safety: user-specific values (chat history, model/mode selection, user/session identifiers, and transient image state) must live in Gradio session state or an external shared store, not in process-global singleton fields.
 - Chat session is not updated to compute and store title
 - Logging relies on existence of c:\temp and would not be accessable when running on server
 - ensuring local image would likely fail on server
 - every message logged to supabase is in a separate file. The file should contain all logs for a user session. The name of the file should also have meaning. For example, user_id and timestamp
+- Session end detection/cleanup — Add TTL sweeper for stale sessions
+- Documentation updates — Update README architecture section
 
 See `.github/copilot-instructions.md` for full development rules.
 

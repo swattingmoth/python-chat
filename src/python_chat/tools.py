@@ -1,12 +1,8 @@
-from collections import defaultdict
-from email.policy import default
 import inspect
 import json
 from datetime import datetime
-from json import tool
 import logging
-from types import SimpleNamespace
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypedDict
 
 from attr import dataclass
 from xai_sdk.chat import tool as xai_tool
@@ -14,6 +10,14 @@ from xai_sdk.chat import tool as xai_tool
 from xai_sdk.proto import chat_pb2
 
 logger = logging.getLogger(__name__)
+
+
+class RegisteredTool(TypedDict):
+    name: str
+    function: Callable[..., Any]
+    accept_tool_call_id: bool
+    max_turns: int | None
+    tool: Any
 
 
 def today_date() -> str:
@@ -56,17 +60,14 @@ class ToolResult:
 
 
 class Tools:
-    def __init__(self) -> None:
-        """Initialize the tool registry."""
-        self.tools: dict[str, dict[str, Any]] = {}
-
+    @staticmethod
     def register_tool(
-        self,
+        active_tools: list[RegisteredTool],
         func: Callable[..., Any],
         description: Optional[str] = None,
         name: Optional[str] = None,
         max_turns: Optional[int] = None,
-    ) -> None:
+    ) -> list[RegisteredTool]:
         """Register a function as a tool that the model can call.
 
         Parameter types are derived from function annotations, and descriptions are derived from the function docstrings.
@@ -108,7 +109,8 @@ class Tools:
             "additionalProperties": False,
         }
 
-        self.tools[tool_name] = {
+        new_tool: RegisteredTool = {
+            "name": tool_name,
             "function": func,
             "accept_tool_call_id": accept_tool_call_id,
             "max_turns": max_turns,
@@ -118,40 +120,49 @@ class Tools:
                 parameters=param_schema,
             ),
         }
+        # Replace any existing tool with the same name and return a new list.
+        retained = [t for t in active_tools if t["name"] != tool_name]
+        return [*retained, new_tool]
 
-    def remove_tool(self, func: Callable[..., Any]) -> None:
+    @staticmethod
+    def remove_tool(
+        active_tools: list[RegisteredTool], func: Callable[..., Any]
+    ) -> list[RegisteredTool]:
         """Removes a tool from the registry."""
-        if func.__name__ in self.tools:
-            del self.tools[func.__name__]
+        tool_name = func.__name__
+        return [t for t in active_tools if t["name"] != tool_name]
 
+    @staticmethod
     def handle_tool_calls(
-        self, tool_calls: list[chat_pb2.ToolCall]
+        active_tools: list[RegisteredTool], tool_calls: list[chat_pb2.ToolCall]
     ) -> list[ToolResult]:
         """Handles tool calls from the model by executing the corresponding functions and returning their results."""
         tool_results: list[ToolResult] = []
-        tool_call_counts: dict[str, int] = defaultdict(int)
+        tool_call_counts: dict[str, int] = {}
+        by_name = {t["name"]: t for t in active_tools}
         for tool_call in tool_calls:
             logging.debug(f"Got tool call {tool_call}")
             # check if tool call count for this tool exceeds max_turns
 
-            func = self.tools.get(tool_call.function.name, {})
-            if func:
-                max_turns = func.get("max_turns")
-                if max_turns and tool_call_counts[tool_call.function.name] >= max_turns:
+            registered_tool = by_name.get(tool_call.function.name)
+            if registered_tool:
+                max_turns = registered_tool.get("max_turns")
+                call_count = tool_call_counts.get(tool_call.function.name, 0)
+                if max_turns and call_count >= max_turns:
                     logging.debug(
                         f"Skipping tool call {tool_call}. Already called {tool_call_counts[tool_call.function.name]} time(s)."
                     )
                     continue
-                tool_call_counts[tool_call.function.name] += 1
+                tool_call_counts[tool_call.function.name] = call_count + 1
 
                 try:
                     arguments = json.loads(tool_call.function.arguments)
                     logging.debug(
-                        f"Calling function {func['function']} with arguments {arguments}"
+                        f"Calling function {registered_tool['function']} with arguments {arguments}"
                     )
-                    if func["accept_tool_call_id"]:
+                    if registered_tool["accept_tool_call_id"]:
                         arguments["tool_call_id"] = tool_call.id
-                    result = func["function"](**arguments)
+                    result = registered_tool["function"](**arguments)
                     logging.debug(f"Got result {result} from tool call")
 
                     if isinstance(result, ToolResult):
@@ -165,7 +176,6 @@ class Tools:
                     logging.debug(
                         f"Error executing tool {tool_call.function.name}: {e}"
                     )
-                    arguments = {}
                     tool_results.append(
                         ToolResult(
                             f"Error executing tool {tool_call.function.name}",
@@ -177,15 +187,16 @@ class Tools:
 
         return tool_results
 
+    @staticmethod
     def get_tools_for_model(
-        self, additional_tools: Optional[list[Any]] = None
+        active_tools: list[RegisteredTool], additional_tools: Optional[list[Any]] = None
     ) -> list[Any]:
         """Return the tool objects (xai chat tool protos) formatted for the model's tool interface.
 
         Client-side tools are converted to xai_sdk.chat.tool(...) protos.
         Server-side tools (e.g. web_search()) may be passed in via additional_tools.
         """
-        tools: list[Any] = [self.tools[t]["tool"] for t in self.tools]
+        tools: list[Any] = [tool_entry["tool"] for tool_entry in active_tools]
 
         if additional_tools:
             tools.extend(additional_tools)
