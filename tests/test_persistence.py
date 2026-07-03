@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
+import time
 
 import pytest
 
@@ -107,6 +109,32 @@ def test_async_log_queue_batches_and_uploads_jsonl() -> None:
     assert b'"event": "b"' in upload["data"]
 
 
+def test_async_log_queue_defaults_to_sixty_second_flush_window() -> None:
+    fake_storage = _FakeStorageClient()
+
+    queue = AsyncLogQueue(fake_storage, max_batch_size=2)  # type: ignore[arg-type]
+
+    assert queue._flush_interval_seconds == 60.0
+
+
+def test_async_log_queue_flushes_when_oldest_event_exceeds_timeout() -> None:
+    fake_storage = _FakeStorageClient()
+    queue = AsyncLogQueue(
+        fake_storage,  # type: ignore[arg-type]
+        flush_interval_seconds=60.0,
+        max_batch_size=2,
+    )
+
+    now = datetime.now(timezone.utc)
+    pending = [
+        build_log_event(10, {"event": "old"}).model_copy(
+            update={"occurred_at": now - timedelta(seconds=61)}
+        )
+    ]
+
+    assert queue._should_flush(pending, now) is True
+
+
 def test_async_log_queue_start_without_running_event_loop() -> None:
     fake_storage = _FakeStorageClient()
     queue = AsyncLogQueue(
@@ -121,6 +149,18 @@ def test_async_log_queue_start_without_running_event_loop() -> None:
 
     assert len(fake_storage.uploads) == 1
     assert b'"event": "startup"' in fake_storage.uploads[0]["data"]
+
+
+def test_async_log_queue_stop_returns_quickly_with_default_timeout() -> None:
+    fake_storage = _FakeStorageClient()
+    queue = AsyncLogQueue(fake_storage)  # type: ignore[arg-type]
+
+    queue.start()
+    start = time.monotonic()
+    queue.stop()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0
 
 
 class _FakeStorageBucket:

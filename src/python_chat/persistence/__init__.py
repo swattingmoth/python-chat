@@ -90,19 +90,21 @@ class SupabaseClient:
 class AsyncLogQueue:
     """Batches detailed JSONL logs and uploads them to Supabase storage."""
 
+    _stop_signal = object()
+
     def __init__(
         self,
         supabase_client: SupabaseClient,
         *,
         bucket: str = "chat-logs",
-        flush_interval_seconds: float = 5.0,
+        flush_interval_seconds: float = 60.0,
         max_batch_size: int = 100,
     ) -> None:
         self._supabase_client = supabase_client
         self._bucket = bucket
         self._flush_interval_seconds = flush_interval_seconds
         self._max_batch_size = max_batch_size
-        self._queue: queue.Queue[QueueEvent] = queue.Queue()
+        self._queue: queue.Queue[Any] = queue.Queue()
         self._stop_event = threading.Event()
         self._worker_thread: threading.Thread | None = None
 
@@ -121,6 +123,7 @@ class AsyncLogQueue:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._queue.put_nowait(self._stop_signal)
         if self._worker_thread is not None:
             worker_thread = self._worker_thread
             self._worker_thread = None
@@ -130,13 +133,14 @@ class AsyncLogQueue:
         pending: list[QueueEvent] = []
 
         while not self._stop_event.is_set() or not self._queue.empty() or pending:
-            try:
-                item = self._queue.get(
-                    timeout=self._flush_interval_seconds,
-                )
-                pending.append(item)
-            except queue.Empty:
-                pass
+            if not pending:
+                try:
+                    item = self._queue.get(timeout=self._flush_interval_seconds)
+                    if item is self._stop_signal:
+                        break
+                    pending.append(item)
+                except queue.Empty:
+                    continue
 
             while len(pending) < self._max_batch_size and not self._queue.empty():
                 try:
@@ -144,13 +148,42 @@ class AsyncLogQueue:
                 except queue.Empty:
                     break
 
-            if pending and (
-                len(pending) >= self._max_batch_size
-                or self._stop_event.is_set()
-                or self._queue.empty()
-            ):
+            now = datetime.now(timezone.utc)
+            if pending and self._should_flush(pending, now):
                 self._flush_batch(pending)
                 pending = []
+                continue
+
+            if pending and not self._stop_event.is_set():
+                remaining_seconds = self._remaining_flush_seconds(pending, now)
+                try:
+                    item = self._queue.get(timeout=remaining_seconds)
+                    if item is self._stop_signal:
+                        break
+                    pending.append(item)
+                except queue.Empty:
+                    pass
+
+        if pending:
+            self._flush_batch(pending)
+
+    def _oldest_pending_age_seconds(
+        self, batch: list[QueueEvent], now: datetime
+    ) -> float:
+        oldest = batch[0].occurred_at
+        return max(0.0, (now - oldest).total_seconds())
+
+    def _remaining_flush_seconds(self, batch: list[QueueEvent], now: datetime) -> float:
+        age_seconds = self._oldest_pending_age_seconds(batch, now)
+        return max(0.0, self._flush_interval_seconds - age_seconds)
+
+    def _should_flush(self, batch: list[QueueEvent], now: datetime) -> bool:
+        return (
+            len(batch) >= self._max_batch_size
+            or self._oldest_pending_age_seconds(batch, now)
+            >= self._flush_interval_seconds
+            or self._stop_event.is_set()
+        )
 
     def _flush_batch(self, batch: list[QueueEvent]) -> None:
         if not batch:

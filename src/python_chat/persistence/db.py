@@ -45,6 +45,7 @@ def _rpc_with_retry(
     backoff_seconds: float = 0.2,
 ) -> Any:
     attempt = 0
+    logger.info("Calling RPC function '%s' with params: %s", function_name, params)
     while True:
         try:
             response = client.rpc(function_name, params)
@@ -52,6 +53,9 @@ def _rpc_with_retry(
             result = cast(RpcResult, executed)
             return result.data
         except Exception:
+            logger.exception(
+                "RPC call to '%s' failed on attempt %d", function_name, attempt + 1
+            )
             attempt += 1
             if attempt >= retries:
                 raise
@@ -100,6 +104,17 @@ def create_chat_message(client: RpcClient, message: ChatMessage) -> int | None:
         },
     )
     return _extract_scalar_id(data)
+
+
+def get_secret_from_vault(client: RpcClient, secret_name: str) -> str | None:
+    data = _rpc_with_retry(
+        client,
+        "get_from_vault",
+        {
+            "p_secret_name": secret_name,
+        },
+    )
+    return str(data)
 
 
 def create_tool_call(client: RpcClient, call: ToolCall) -> int | None:

@@ -7,6 +7,7 @@ import uuid
 from xai_sdk import Client
 
 from python_chat.api import Models
+from python_chat.utils import get_environment
 from python_chat.context import ModelContext
 from python_chat.persistence import ensure_local_image_copy
 from python_chat.tools import ToolResult
@@ -53,7 +54,10 @@ def generate_image(
     )
     image_data: bytes = image_response.image
     image_name = f"{uuid.uuid4()}.png"
-    image_file = ensure_local_image_copy(image_path, image_name, image_data)
+    image_file = ""
+    if get_environment() == "development":
+        image_file = ensure_local_image_copy(image_path, image_name, image_data)
+        logger.info(f"Generated image saved to {image_file}")
 
     model_context = ModelContext.current()
     if upload_to_storage and model_context.persistence_client:
@@ -72,10 +76,11 @@ def generate_image(
             )
             if public_url:
                 image_file = public_url
+            else:
+                image_file = remote_path
+
         except Exception as exc:
             logger.warning("Image upload to storage failed: %s", exc)
-
-    logger.info(f"Generated image saved to {image_file}")
 
     return (image_file, image_data)
 

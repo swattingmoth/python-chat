@@ -110,20 +110,36 @@ class _FakeChatInterface:
         return []
 
 
-def test_configure_logging_supports_defaults_and_file_only(monkeypatch: Any) -> None:
-    basic_config = MagicMock()
-    file_handler = MagicMock(return_value="fh")
-    stream_handler = MagicMock(return_value="sh")
+def test_configure_logging_uses_root_handlers_for_local_and_server(
+    monkeypatch: Any,
+) -> None:
+    class _FakePath:
+        def __init__(self) -> None:
+            self.parent = self
 
-    monkeypatch.setattr(app_module.logging, "basicConfig", basic_config)  # type: ignore
+        def __truediv__(self, _: str) -> "_FakePath":
+            return self
+
+        def mkdir(self, *, parents: bool, exist_ok: bool) -> None:
+            del parents
+            del exist_ok
+
+    file_handler = MagicMock(return_value=MagicMock())
+    stream_handler = MagicMock(return_value=MagicMock())
+    root_logger = MagicMock(handlers=[])
+
+    monkeypatch.setattr(app_module, "Path", lambda _: _FakePath())
     monkeypatch.setattr(app_module.logging, "FileHandler", file_handler)  # type: ignore
     monkeypatch.setattr(app_module.logging, "StreamHandler", stream_handler)  # type: ignore
+    monkeypatch.setattr(app_module.logging, "getLogger", lambda *_: root_logger)  # type: ignore
 
     app_module.configure_logging(logfile_path=None, log_to_console=True)
+    monkeypatch.setenv("CHATBOT_ENV", "production")
     app_module.configure_logging(logfile_path="c:/tmp/chat.log", log_to_console=False)
 
-    assert basic_config.call_count == 2
-    assert file_handler.call_count == 2
+    assert file_handler.call_count == 1
+    assert stream_handler.call_count == 2
+    assert root_logger.addHandler.call_count == 3
 
 
 def test_launch_app_registers_handlers_and_executes_callbacks(monkeypatch: Any) -> None:

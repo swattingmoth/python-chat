@@ -1,7 +1,10 @@
 import atexit
 import datetime
+import json
 import logging
 import os
+from pathlib import Path
+import sys
 from typing import Any, Generator, Optional, cast
 
 import gradio as gr
@@ -12,26 +15,65 @@ from python_chat.context import ModelContext
 from python_chat.images import generate_image_tool
 from python_chat.persistence import start_log_worker
 from python_chat.tools import RegisteredTool, Tools, today_date
+from python_chat.utils import get_environment
 
 logger = logging.getLogger(__name__)
+
+
+class _JsonFormatter(logging.Formatter):
+    """Format log records as compact JSON for telemetry pipelines."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.datetime.fromtimestamp(
+                record.created, tz=datetime.timezone.utc
+            ).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+
+
+def _resolve_daily_log_path(logfile_path: Optional[str] = None) -> str:
+    if logfile_path:
+        return logfile_path
+
+    tdy = datetime.date.today().strftime("%Y-%m-%d")
+    log_dir = Path(os.getenv("CHATBOT_LOG_DIR", "c:\\temp"))
+    return str(log_dir / f"chatbot_{tdy}.log")
 
 
 def configure_logging(
     logfile_path: Optional[str] = None, log_to_console: bool = True
 ) -> None:
-    if not logfile_path:
-        tdy = datetime.date.today().strftime("%Y-%m-%d")
-        logfile_path = rf"c:\temp\chatbot_logs\chatbot_{tdy}.log"
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=(
-            [logging.FileHandler(logfile_path), logging.StreamHandler()]
-            if log_to_console
-            else [logging.FileHandler(logfile_path)]
-        ),
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+
+    detailed_formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
+
+    if get_environment() == "production":
+        json_stdout_handler = logging.StreamHandler(stream=sys.stdout)
+        json_stdout_handler.setFormatter(_JsonFormatter())
+        json_stdout_handler.setLevel(logging.INFO)
+        root_logger.addHandler(json_stdout_handler)
+        return
+
+    resolved_path = _resolve_daily_log_path(logfile_path)
+    json_file_handler = logging.FileHandler(resolved_path, encoding="utf-8")
+    json_file_handler.setFormatter(_JsonFormatter())
+    root_logger.addHandler(json_file_handler)
+
+    if log_to_console:
+        detailed_console_handler = logging.StreamHandler()
+        detailed_console_handler.setFormatter(detailed_formatter)
+        root_logger.addHandler(detailed_console_handler)
 
 
 def get_tools_for_choice(choice: str) -> list[RegisteredTool]:
