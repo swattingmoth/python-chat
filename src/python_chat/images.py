@@ -1,16 +1,15 @@
-import base64
-from datetime import datetime, timezone
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 
 from xai_sdk import Client
 
 from python_chat.api import Models
-from python_chat.utils import get_environment
 from python_chat.context import ModelContext
 from python_chat.persistence import ensure_local_image_copy
 from python_chat.tools import ToolResult
+from python_chat.utils import get_environment
 
 logger = logging.getLogger(__name__)
 

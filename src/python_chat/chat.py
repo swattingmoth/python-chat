@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import io
 import json
-from logging import Logger
 import logging
-from typing import Any, Callable, Generator, Optional, Sequence, TypedDict
 import os
+from datetime import datetime, timezone
 from functools import wraps
+from typing import Any, Callable, Generator, Optional, Sequence, TypedDict
 
 # Disable OpenTelemetry tracing early to prevent context token issues
 os.environ.setdefault("OTEL_TRACES_EXPORTER", "none")
@@ -15,17 +14,15 @@ os.environ.setdefault("OTEL_METRICS_EXPORTER", "none")
 
 from google.protobuf import json_format
 from PIL import Image
-
 from xai_sdk.chat import Chunk, Response, assistant, system, tool_result, user
-from xai_sdk.tools import get_tool_call_type
-from xai_sdk.tools import code_execution, web_search
+from xai_sdk.proto import chat_pb2
+from xai_sdk.tools import code_execution, get_tool_call_type, web_search
 
 from python_chat.api import Models
 from python_chat.context import ModelContext
 from python_chat.persistence import db
 from python_chat.persistence.models import ChatMessage, ToolCall
 from python_chat.tools import RegisteredTool, ToolResult, Tools
-from xai_sdk.proto import chat_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +325,7 @@ class ChatInterface:
     ) -> None:
         """Append a message to the chat history."""
         history.append(message)
-        logger.info(f"Appended message to history: {message_to_dict(message)}")
+        logger.debug(f"Appended message to history: {message_to_dict(message)}")
 
     def chat(
         self,
@@ -376,7 +373,7 @@ class ChatInterface:
         session_runtime["model_name"] = new_model
 
         logger.info(f"Set model to {new_model}, is_image_mode={is_image_mode}")
-        logger.info(f"System message:\n{system_message}")
+        logger.debug(f"System message:\n{system_message}")
 
         try:
             if isinstance(self.modelContext, ModelContext):

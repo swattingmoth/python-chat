@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
-import time
 
 import pytest
 
@@ -247,9 +247,10 @@ def test_supabase_client_safe_when_disabled_and_errors() -> None:
 
 
 def test_supabase_client_auto_init_with_fake_supabase_module(monkeypatch: Any) -> None:
-    from python_chat.persistence import SupabaseClient
-    from types import ModuleType
     import sys
+    from types import ModuleType
+
+    from python_chat.persistence import SupabaseClient
 
     fake_module = ModuleType("supabase")
 
@@ -274,9 +275,10 @@ def test_supabase_client_auto_init_with_fake_supabase_module(monkeypatch: Any) -
 def test_supabase_client_init_warns_on_unexpected_type_and_handles_import_error(
     monkeypatch: Any,
 ) -> None:
-    from python_chat.persistence import SupabaseClient
-    from types import ModuleType
     import sys
+    from types import ModuleType
+
+    from python_chat.persistence import SupabaseClient
 
     fake_bad_module = ModuleType("supabase")
 
@@ -318,8 +320,9 @@ def test_supabase_client_init_warns_on_unexpected_type_and_handles_import_error(
 
 
 def test_start_worker_and_local_image_copy(tmp_path: Path) -> None:
-    from python_chat.persistence import start_log_worker, ensure_local_image_copy
     from pathlib import Path
+
+    from python_chat.persistence import ensure_local_image_copy, start_log_worker
 
     queue = MagicMock()
     queue.start = MagicMock()
@@ -369,8 +372,6 @@ def test_db_extract_scalar_id_variants() -> None:
 
 
 def test_db_rpc_with_retry_success_and_exhaustion(monkeypatch: Any) -> None:
-    import time
-
     sleeps: list[float] = []
     monkeypatch.setattr(db, "_extract_scalar_id", db._extract_scalar_id)
     monkeypatch.setattr(db, "time", SimpleNamespace(sleep=lambda s: sleeps.append(s)))
@@ -397,6 +398,14 @@ def test_db_complete_chat_session_invokes_rpc(monkeypatch: Any) -> None:
         MagicMock(), session_id=12, ended_at="2026-01-01T00:00:00Z"
     )
     assert called[0][0] == "complete_chat_session"
+
+
+def test_get_secret_from_vault_handles_none_and_whitespace(monkeypatch: Any) -> None:
+    monkeypatch.setattr(db, "_rpc_with_retry", lambda *_args, **_kwargs: None)
+    assert db.get_secret_from_vault(MagicMock(), "XAI_API_KEY") is None
+
+    monkeypatch.setattr(db, "_rpc_with_retry", lambda *_args, **_kwargs: "  ")
+    assert db.get_secret_from_vault(MagicMock(), "XAI_API_KEY") is None
 
 
 def test_async_log_queue_covers_timeout_empty_flush_and_upload_failure() -> None:

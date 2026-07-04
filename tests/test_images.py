@@ -10,7 +10,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Generator
 from unittest.mock import MagicMock, patch
-from xai_sdk import Client
 
 import pytest
 
@@ -32,7 +31,7 @@ def reset_and_setup_context() -> Generator[None, None, None]:
         image=b"fake-png-bytes-here"
     )
 
-    ctx = ModelContext.create(fake_client, "/tmp/test-images")
+    ModelContext.create(fake_client, "/tmp/test-images")
     # ensure model starts as QUESTIONS but tool will switch
     yield
     ModelContext.reset()

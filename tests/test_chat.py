@@ -9,12 +9,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Any, Callable, Generator
+from typing import Any, Generator
 from unittest.mock import MagicMock
-from xai_sdk.chat import user
 
 import pytest
 from PIL import Image as PILImage
+from xai_sdk.chat import user
+from xai_sdk.proto import chat_pb2
 
 from python_chat.api import Models
 from python_chat.chat import (
@@ -26,7 +27,6 @@ from python_chat.chat import (
     message_to_dict,
 )
 from python_chat.tools import ToolResult
-from xai_sdk.proto import chat_pb2
 
 # --- Helpers for realistic fake streams (xai-sdk style) ---
 # The chat() loop consumes Generator[tuple[Response, Chunk], ...] directly.

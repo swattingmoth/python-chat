@@ -92,15 +92,19 @@ uv run pytest -v tests/test_hello.py
 
 All tests should pass ✅
 
-### Type Checking
+### Type Checking and Linting
 
 ```bash
 uv run mypy src
 # or simply
 uv run mypy
 ```
-
 Should report no errors with strict mode.
+
+```bash
+uv run ruff check .
+```
+Should report no errors
 
 ### Running Code / Python Shell
 

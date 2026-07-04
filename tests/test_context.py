@@ -7,7 +7,6 @@ validation, and error cases. Uses mocks for xAI Client; reset() between tests.
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock

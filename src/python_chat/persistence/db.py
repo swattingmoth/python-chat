@@ -45,7 +45,8 @@ def _rpc_with_retry(
     backoff_seconds: float = 0.2,
 ) -> Any:
     attempt = 0
-    logger.info("Calling RPC function '%s' with params: %s", function_name, params)
+    logger.info(f"Calling RPC function '{function_name}'")
+    logger.debug(f"with params: {params}")
     while True:
         try:
             response = client.rpc(function_name, params)
@@ -114,6 +115,9 @@ def get_secret_from_vault(client: RpcClient, secret_name: str) -> str | None:
             "p_secret_name": secret_name,
         },
     )
+    if data is None or not isinstance(data, str) or not data.strip():
+        return None
+
     return str(data)
 
 

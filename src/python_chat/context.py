@@ -1,18 +1,16 @@
-import code
-from datetime import datetime, timezone
-from contextlib import contextmanager
 import logging
-from types import SimpleNamespace
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Callable, Generator, Optional
 
 from xai_sdk import Client
-from xai_sdk.tools import web_search, code_execution
 from xai_sdk.proto import chat_pb2
+from xai_sdk.tools import code_execution, web_search
 
 from python_chat.api import Models
 from python_chat.persistence import AsyncLogQueue, SupabaseClient, build_log_event, db
 from python_chat.persistence.models import ChatSession
-from python_chat.tools import RegisteredTool, Tools, ToolResult
+from python_chat.tools import RegisteredTool, ToolResult, Tools
 
 logger = logging.getLogger(__name__)
 

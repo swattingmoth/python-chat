@@ -11,11 +11,24 @@ os.environ["XAI_SDK_DISABLE_TRACING"] = "true"
 
 from dotenv import load_dotenv
 
-from python_chat.app import configure_logging, launch_app
-from python_chat.utils import get_environment
 from python_chat.api import init_api
+from python_chat.app import configure_logging, launch_app
 from python_chat.context import ModelContext
 from python_chat.persistence import AsyncLogQueue, SupabaseClient, db
+from python_chat.utils import get_environment
+
+
+def _resolve_xai_api_key(persistence_client: SupabaseClient) -> str:
+    if persistence_client.enabled and persistence_client.rpc_client is not None:
+        vault_key = db.get_secret_from_vault(
+            persistence_client.rpc_client,
+            "XAI_API_KEY",
+        )
+        if vault_key:
+            return vault_key
+
+    raise RuntimeError("XAI_API_KEY is not configured. Set XAI_API_KEY vault secret.")
+
 
 if __name__ == "__main__":
     load_dotenv()
@@ -30,19 +43,26 @@ if __name__ == "__main__":
 
         logger.info(f"Starting in environment: {get_environment()}")
 
-        client = init_api("XAI_API_KEY", "https://api.x.ai/v1")
         persistence_client = SupabaseClient()
-        log_queue = AsyncLogQueue(persistence_client)
+        log_queue: AsyncLogQueue | None
+        if persistence_client.enabled:
+            log_queue = AsyncLogQueue(persistence_client)
+            resolved_persistence_client: SupabaseClient | None = persistence_client
+        else:
+            logger.warning(
+                "Supabase client is not configured; persistence and storage uploads are disabled."
+            )
+            log_queue = None
+            resolved_persistence_client = None
 
-        xai_api_key = db.get_secret_from_vault(
-            persistence_client.rpc_client, "XAI_API_KEY"
-        )
-        if not xai_api_key:
-            raise Exception("XAI_API_KEY secret is not set in the vault.")
+        xai_api_key = _resolve_xai_api_key(persistence_client)
+        os.environ["XAI_API_KEY"] = xai_api_key
+        client = init_api("XAI_API_KEY", "https://api.x.ai/v1")
+
         ModelContext.create(
             client,
             image_folder,
-            persistence_client=persistence_client,
+            persistence_client=resolved_persistence_client,
             log_queue=log_queue,
         )
         app = launch_app()
