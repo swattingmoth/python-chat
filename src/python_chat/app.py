@@ -49,7 +49,9 @@ def _resolve_daily_log_path(logfile_path: Optional[str] = None) -> str:
 
 
 def configure_logging(
-    logfile_path: Optional[str] = None, log_to_console: bool = True
+    logfile_path: Optional[str] = None,
+    log_to_console: bool = True,
+    log_to_file: bool = False,
 ) -> None:
 
     root_logger = logging.getLogger()
@@ -67,10 +69,11 @@ def configure_logging(
         root_logger.addHandler(json_stdout_handler)
         return
 
-    resolved_path = _resolve_daily_log_path(logfile_path)
-    json_file_handler = logging.FileHandler(resolved_path, encoding="utf-8")
-    json_file_handler.setFormatter(_JsonFormatter())
-    root_logger.addHandler(json_file_handler)
+    if log_to_file:
+        resolved_path = _resolve_daily_log_path(logfile_path)
+        json_file_handler = logging.FileHandler(resolved_path, encoding="utf-8")
+        json_file_handler.setFormatter(_JsonFormatter())
+        root_logger.addHandler(json_file_handler)
 
     if log_to_console:
         detailed_console_handler = logging.StreamHandler()

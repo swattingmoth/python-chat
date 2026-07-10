@@ -133,6 +133,7 @@ def create_tool_call(client: RpcClient, call: ToolCall) -> int | None:
             "p_output_result": call.output_result,
             "p_error_message": call.error_message,
             "p_latency_ms": call.latency_ms,
+            "p_estimated_cost": call.estimated_cost,
         },
     )
     return _extract_scalar_id(data)

@@ -287,6 +287,7 @@ class ChatInterface:
         output_result: dict[str, Any] | None,
         error_message: str | None,
         latency_ms: int | None,
+        estimated_cost: float | None = None,
         access_token: str | None,
     ) -> None:
         if not isinstance(message_id, int):
@@ -317,6 +318,7 @@ class ChatInterface:
                     output_result=output_result,
                     error_message=error_message,
                     latency_ms=latency_ms,
+                    estimated_cost=estimated_cost,
                 ),
             )
         except Exception as exc:
@@ -569,6 +571,7 @@ class ChatInterface:
                             output_result=output_payload,
                             error_message=None,
                             latency_ms=None,
+                            estimated_cost=tr.cost,
                             access_token=session_runtime.get("access_token"),
                         )
                         if isinstance(self.modelContext, ModelContext):

@@ -40,7 +40,9 @@ def reset_and_setup_context() -> Generator[None, None, None]:
 def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
     """Core happy path: builds prompt, calls client.image.sample, gets .image bytes, writes uuid.png, returns tuple."""
     fake_client = MagicMock()
-    fake_client.image.sample.return_value = SimpleNamespace(image=b"\x89PNG...")
+    fake_client.image.sample.return_value = SimpleNamespace(
+        image=b"\x89PNG...", cost_usd=0.05
+    )
 
     with (
         patch("python_chat.images.uuid.uuid4") as mock_uuid,
@@ -51,7 +53,7 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
     ):
         mock_uuid.return_value = "test-uuid-1234"
 
-        path, data = generate_image(
+        path, data, cost = generate_image(
             prompt="a cat in hat",
             model=Models.IMAGES,
             client=fake_client,
@@ -71,6 +73,7 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
 
         assert path == "/tmp/test-images/fake.png"
         assert data == b"\x89PNG..."
+        assert cost == 0.05
 
 
 def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult() -> (
@@ -82,7 +85,7 @@ def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult(
 
     with patch(
         "python_chat.images.generate_image",
-        return_value=("/tmp/test-images/generated.png", b"imgdata"),
+        return_value=("/tmp/test-images/generated.png", b"imgdata", 0.0),
     ) as mock_generate_image:
         result = generate_image_tool("draw a tree", "tool-call-1")
 
@@ -102,6 +105,17 @@ def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult(
     assert ModelContext.current().model_name == Models.QUESTIONS
 
 
+def test_generate_image_tool_returns_tool_cost() -> None:
+
+    with patch(
+        "python_chat.images.generate_image",
+        return_value=("/tmp/test-images/generated.png", b"imgdata", 0.05),
+    ):
+        result = generate_image_tool("draw a tree", "tool-call-1")
+
+    assert result.cost == 0.05
+
+
 def test_generate_image_tool_propagates_context_errors() -> None:
     """If no context initialized, current() raises (tool does not swallow)."""
     ModelContext.reset()  # force uninitialized
@@ -112,7 +126,7 @@ def test_generate_image_tool_propagates_context_errors() -> None:
 
 def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
     fake_client = MagicMock()
-    fake_client.image.sample.return_value = SimpleNamespace(image=b"png")
+    fake_client.image.sample.return_value = SimpleNamespace(image=b"png", cost_usd=0.0)
 
     upload_bytes = MagicMock()
     get_public_url = MagicMock(return_value="https://example.test/image.png")
@@ -128,7 +142,7 @@ def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
         "python_chat.images.ensure_local_image_copy", lambda *_: "c:/tmp/local.png"
     )
 
-    image_file, image_data = generate_image(
+    image_file, image_data, cost = generate_image(
         prompt="tree",
         model=Models.IMAGES,
         client=fake_client,
@@ -138,6 +152,7 @@ def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
 
     assert image_data == b"png"
     assert image_file == "https://example.test/image.png"
+    assert cost == 0.0
     upload_bytes.assert_called_once()
     get_public_url.assert_called_once()
 
@@ -146,7 +161,7 @@ def test_generate_image_upload_failure_falls_back_to_local_file(
     monkeypatch: Any,
 ) -> None:
     fake_client = MagicMock()
-    fake_client.image.sample.return_value = SimpleNamespace(image=b"png")
+    fake_client.image.sample.return_value = SimpleNamespace(image=b"png", cost_usd=0.0)
 
     persistence_client = SimpleNamespace(
         upload_bytes=MagicMock(side_effect=RuntimeError("upload failed")),
@@ -161,7 +176,7 @@ def test_generate_image_upload_failure_falls_back_to_local_file(
         lambda *_: "c:/tmp/local-fallback.png",
     )
 
-    image_file, image_data = generate_image(
+    image_file, image_data, cost = generate_image(
         prompt="tree",
         model=Models.IMAGES,
         client=fake_client,
@@ -171,3 +186,24 @@ def test_generate_image_upload_failure_falls_back_to_local_file(
 
     assert image_data == b"png"
     assert image_file == "c:/tmp/local-fallback.png"
+    assert cost == 0.0
+
+
+def test_generate_image_sets_tool_cost(monkeypatch: Any) -> None:
+    fake_client = MagicMock()
+    fake_client.image.sample.return_value = SimpleNamespace(image=b"png", cost_usd=0.05)
+
+    monkeypatch.setattr(
+        "python_chat.images.ensure_local_image_copy",
+        lambda *_: "c:/tmp/local.png",
+    )
+
+    _, _, estimated_cost = generate_image(
+        prompt="tree",
+        model=Models.IMAGES,
+        client=fake_client,
+        image_path="c:/tmp",
+        upload_to_storage=False,
+    )
+
+    assert estimated_cost == 0.05

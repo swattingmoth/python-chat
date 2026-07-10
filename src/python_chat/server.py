@@ -13,6 +13,7 @@ from python_chat.app import configure_logging, launch_app
 from python_chat.chatbot import initialize_runtime
 from python_chat.context import ModelContext
 from python_chat.dotenv_loader import load_env_file
+from python_chat.utils import get_environment
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,8 @@ def _normalize_next_path(candidate: str | None) -> str:
 def _cookie_secure_flag() -> bool:
     configured = os.getenv("COOKIE_SECURE")
     if configured is None:
+        if get_environment() == "production":
+            return True
         return False
 
     return configured.strip().lower() in {"1", "true", "yes", "on"}
@@ -242,7 +245,9 @@ def create_server_app() -> FastAPI:
 
         try:
             access_token, _, max_age = _authenticate_supabase_password(email, password)
-        except HTTPException:
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                raise
             return RedirectResponse(
                 url=_build_login_url(next_path, error="Invalid email or password."),
                 status_code=status.HTTP_303_SEE_OTHER,
@@ -313,9 +318,20 @@ def create_server_app() -> FastAPI:
     return app
 
 
+def main() -> None:
+    import uvicorn
+
+    port = int(os.getenv("PORT", "7860"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
 if os.getenv("PYTHON_CHAT_SKIP_SERVER_BOOTSTRAP") == "1" and os.getenv(
     "PYTEST_CURRENT_TEST"
 ):
     app = FastAPI(title="python-chat API (bootstrap skipped)")
 else:
     app = create_server_app()
+
+
+if __name__ == "__main__":
+    main()

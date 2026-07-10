@@ -44,6 +44,7 @@ class ToolCall(BaseModel):
     output_result: dict[str, Any] | None = None
     error_message: str | None = None
     latency_ms: int | None = None
+    estimated_cost: float | None = None
 
 
 class QueueEvent(BaseModel):

@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 from typing import Any
-
-import pytest
-from fastapi import HTTPException, status
 
 
 def test_extract_bearer_token_parses_expected_values(monkeypatch: Any) -> None:
@@ -60,10 +56,52 @@ def test_cookie_secure_flag_respects_env(monkeypatch: Any) -> None:
     from python_chat.server import _cookie_secure_flag
 
     monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    monkeypatch.delenv("CHATBOT_ENV", raising=False)
     assert _cookie_secure_flag() is False
+
+    monkeypatch.setenv("CHATBOT_ENV", "production")
+    assert _cookie_secure_flag() is True
 
     monkeypatch.setenv("COOKIE_SECURE", "true")
     assert _cookie_secure_flag() is True
+
+
+def test_login_submit_propagates_server_errors(monkeypatch: Any) -> None:
+    monkeypatch.setenv("PYTHON_CHAT_SKIP_SERVER_BOOTSTRAP", "1")
+
+    from fastapi import HTTPException, status
+    from fastapi.testclient import TestClient
+
+    from python_chat import server as server_module
+
+    monkeypatch.setattr(server_module, "initialize_runtime", lambda: None)
+    monkeypatch.setattr(server_module, "launch_app", lambda **_: object())
+    monkeypatch.setattr(server_module.gr, "mount_gradio_app", lambda *_, **__: None)  # type: ignore
+
+    app = server_module.create_server_app()
+    client = TestClient(app)
+
+    def raise_server_error(email: str, password: str) -> tuple[str, str, int | None]:
+        del email
+        del password
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Supabase auth verification is not configured.",
+        )
+
+    monkeypatch.setattr(
+        server_module,
+        "_authenticate_supabase_password",
+        raise_server_error,
+    )
+
+    response = client.post(
+        "/login",
+        data={"email": "user@example.com", "password": "secret"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 500
 
 
 def test_resolve_identity_reads_request_state(monkeypatch: Any) -> None:
@@ -74,92 +112,6 @@ def test_resolve_identity_reads_request_state(monkeypatch: Any) -> None:
     request = SimpleNamespace(
         state=SimpleNamespace(user_id="u-1", access_token="t-1"),
     )
-    wrapped_request = SimpleNamespace(request=request)
 
-    assert _resolve_identity(wrapped_request) == ("u-1", "t-1")
+    assert _resolve_identity(request) == ("u-1", "t-1")  # type: ignore
     assert _resolve_identity(None) == (None, None)
-
-
-def test_verify_supabase_user_returns_user_id(monkeypatch: Any) -> None:
-    monkeypatch.setenv("PYTHON_CHAT_SKIP_SERVER_BOOTSTRAP", "1")
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
-
-    from python_chat.server import _verify_supabase_user
-
-    class _FakeAuth:
-        def get_user(self, access_token: str) -> Any:
-            assert access_token == "valid-token"
-            return SimpleNamespace(user=SimpleNamespace(id="user-123"))
-
-    class _FakeClient:
-        auth = _FakeAuth()
-
-    def _create_client(url: str, key: str) -> Any:
-        assert url == "https://example.supabase.co"
-        assert key == "anon-key"
-        return _FakeClient()
-
-    monkeypatch.setitem(
-        sys.modules,
-        "supabase",
-        SimpleNamespace(create_client=_create_client),
-    )
-
-    assert _verify_supabase_user("valid-token") == "user-123"
-
-
-def test_verify_supabase_user_raises_unauthorized_on_client_error(
-    monkeypatch: Any,
-) -> None:
-    monkeypatch.setenv("PYTHON_CHAT_SKIP_SERVER_BOOTSTRAP", "1")
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
-
-    from python_chat.server import _verify_supabase_user
-
-    class _FakeAuth:
-        def get_user(self, access_token: str) -> Any:
-            raise RuntimeError("token invalid")
-
-    class _FakeClient:
-        auth = _FakeAuth()
-
-    monkeypatch.setitem(
-        sys.modules,
-        "supabase",
-        SimpleNamespace(create_client=lambda _url, _key: _FakeClient()),
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        _verify_supabase_user("invalid-token")
-
-    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert exc_info.value.detail == "Invalid Supabase access token."
-
-
-def test_verify_supabase_user_raises_when_user_id_missing(monkeypatch: Any) -> None:
-    monkeypatch.setenv("PYTHON_CHAT_SKIP_SERVER_BOOTSTRAP", "1")
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
-
-    from python_chat.server import _verify_supabase_user
-
-    class _FakeAuth:
-        def get_user(self, access_token: str) -> Any:
-            return SimpleNamespace(user=SimpleNamespace(id=""))
-
-    class _FakeClient:
-        auth = _FakeAuth()
-
-    monkeypatch.setitem(
-        sys.modules,
-        "supabase",
-        SimpleNamespace(create_client=lambda _url, _key: _FakeClient()),
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        _verify_supabase_user("valid-token")
-
-    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert exc_info.value.detail == "Supabase token does not contain a valid user id."

@@ -63,7 +63,7 @@ def initialize_runtime() -> ModelContext:
 
 if __name__ == "__main__":
     load_env_file()
-    configure_logging()
+    configure_logging(log_to_file=True)
     logger = logging.getLogger()
 
     try:

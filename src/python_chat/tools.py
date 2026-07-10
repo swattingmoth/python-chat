@@ -1,12 +1,11 @@
 import inspect
 import json
-from datetime import datetime
 import logging
+from datetime import datetime
 from typing import Any, Callable, Optional, TypedDict
 
 from attr import dataclass
 from xai_sdk.chat import tool as xai_tool
-
 from xai_sdk.proto import chat_pb2
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,7 @@ class ToolResult:
     content: Any
     tool_call_id: str
     content_type: str = "text"
+    cost: float = 0.0
     metadata: dict[str, Any] | None = None
 
     def __str__(self) -> str:
