@@ -9,12 +9,14 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "attrs>=26.1.0",
-    "dotenv>=0.9.9",
+    "python-dotenv>=1.0.1",
+    "fastapi>=0.121.0",
     "gradio>=6.14.0",
     "pydantic>=2.11.0",
     "protobuf>=6.33.6",
     "python-env>=1.0.0",
     "supabase>=2.18.1",
+    "uvicorn>=0.38.0",
     "xai-sdk>=1.15.0",
 ]
 

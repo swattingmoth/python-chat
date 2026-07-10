@@ -79,6 +79,7 @@ ToolHandler = Callable[
 
 class SessionRuntime(TypedDict):
     user_id: str | None
+    access_token: str | None
     session_id: int | None
     session_mode: str | None
     selected_choice: str
@@ -187,6 +188,7 @@ class ChatInterface:
         if runtime is None:
             return {
                 "user_id": self.modelContext.user_id,
+                "access_token": None,
                 "session_id": None,
                 "session_mode": None,
                 "selected_choice": choice,
@@ -197,6 +199,7 @@ class ChatInterface:
 
         resolved = dict(runtime)
         resolved.setdefault("user_id", self.modelContext.user_id)
+        resolved.setdefault("access_token", None)
         resolved.setdefault("session_id", None)
         resolved.setdefault("session_mode", None)
         resolved.setdefault("selected_choice", choice)
@@ -234,6 +237,7 @@ class ChatInterface:
         session_id: int | None,
         role: str,
         content: str,
+        access_token: str | None,
         tool_calls: list[dict[str, Any]] | None = None,
         estimated_cost: float | None = None,
         estimated_tokens: int | None = None,
@@ -245,9 +249,19 @@ class ChatInterface:
         if not self.modelContext.persistence_client.enabled:
             return None
 
+        user_rpc_client = self.modelContext.persistence_client.rpc_client_for_role(
+            "user",
+            access_token=access_token,
+        )
+        if user_rpc_client is None:
+            logger.warning(
+                "No user-scoped RPC client is available for message persistence"
+            )
+            return None
+
         try:
             created = db.create_chat_message(
-                self.modelContext.persistence_client.rpc_client,
+                user_rpc_client,
                 ChatMessage(
                     session_id=session_id,
                     role=role,
@@ -273,6 +287,7 @@ class ChatInterface:
         output_result: dict[str, Any] | None,
         error_message: str | None,
         latency_ms: int | None,
+        access_token: str | None,
     ) -> None:
         if not isinstance(message_id, int):
             return
@@ -281,9 +296,19 @@ class ChatInterface:
         if not self.modelContext.persistence_client.enabled:
             return
 
+        user_rpc_client = self.modelContext.persistence_client.rpc_client_for_role(
+            "user",
+            access_token=access_token,
+        )
+        if user_rpc_client is None:
+            logger.warning(
+                "No user-scoped RPC client is available for tool persistence"
+            )
+            return
+
         try:
             db.create_tool_call(
-                self.modelContext.persistence_client.rpc_client,
+                user_rpc_client,
                 ToolCall(
                     message_id=message_id,
                     tool_name=tool_name,
@@ -382,6 +407,7 @@ class ChatInterface:
                     user_id=session_runtime.get("user_id"),
                     current_session_id=session_runtime.get("session_id"),
                     current_session_mode=session_runtime.get("session_mode"),
+                    access_token=session_runtime.get("access_token"),
                 )
             else:
                 session_id = self.modelContext.ensure_session(choice)
@@ -397,6 +423,7 @@ class ChatInterface:
                 session_id=session_id,
                 role="user",
                 content=message,
+                access_token=session_runtime.get("access_token"),
             )
             if isinstance(self.modelContext, ModelContext):
                 self.modelContext.enqueue_log_event_for(
@@ -480,6 +507,7 @@ class ChatInterface:
                         session_id=session_id,
                         role="assistant",
                         content=last_response.content,
+                        access_token=session_runtime.get("access_token"),
                         tool_calls=tool_call_dicts if tool_call_dicts else None,
                         estimated_cost=last_response.cost_usd,
                         estimated_tokens=last_response.usage.total_tokens,
@@ -541,6 +569,7 @@ class ChatInterface:
                             output_result=output_payload,
                             error_message=None,
                             latency_ms=None,
+                            access_token=session_runtime.get("access_token"),
                         )
                         if isinstance(self.modelContext, ModelContext):
                             self.modelContext.enqueue_log_event_for(

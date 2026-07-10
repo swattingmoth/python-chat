@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from typing import Any, Generator
 from unittest.mock import MagicMock
 
+import pytest
 from xai_sdk.chat import assistant
 from xai_sdk.proto import chat_pb2
-import pytest
 
 from python_chat.chat import ChatInterface
 from python_chat.tools import ToolResult
@@ -66,27 +66,69 @@ def test_persist_message_handles_guard_and_success_and_exception(
     iface = ChatInterface(model_context)
 
     # Guards
-    assert iface._persist_message(session_id=None, role="user", content="x") is None
+    assert (
+        iface._persist_message(
+            session_id=None,
+            role="user",
+            content="x",
+            access_token=None,
+        )
+        is None
+    )
 
     model_context.persistence_client = None
-    assert iface._persist_message(session_id=1, role="user", content="x") is None
+    assert (
+        iface._persist_message(
+            session_id=1,
+            role="user",
+            content="x",
+            access_token=None,
+        )
+        is None
+    )
 
     model_context.persistence_client = SimpleNamespace(enabled=False)
-    assert iface._persist_message(session_id=1, role="user", content="x") is None
+    assert (
+        iface._persist_message(
+            session_id=1,
+            role="user",
+            content="x",
+            access_token=None,
+        )
+        is None
+    )
 
     # Success
     rpc_client = object()
     model_context.persistence_client = SimpleNamespace(
-        enabled=True, rpc_client=rpc_client
+        enabled=True,
+        rpc_client=rpc_client,
+        rpc_client_for_role=lambda *_args, **_kwargs: rpc_client,
     )
     create_chat_message = MagicMock(return_value=123)
     monkeypatch.setattr("python_chat.chat.db.create_chat_message", create_chat_message)
 
-    assert iface._persist_message(session_id=1, role="assistant", content="ok") == 123
+    assert (
+        iface._persist_message(
+            session_id=1,
+            role="assistant",
+            content="ok",
+            access_token="tok",
+        )
+        == 123
+    )
 
     # Exception fallback
     create_chat_message.side_effect = RuntimeError("db fail")
-    assert iface._persist_message(session_id=1, role="assistant", content="ok") is None
+    assert (
+        iface._persist_message(
+            session_id=1,
+            role="assistant",
+            content="ok",
+            access_token="tok",
+        )
+        is None
+    )
 
 
 def test_persist_tool_call_guard_and_exception(monkeypatch: Any) -> None:
@@ -101,10 +143,13 @@ def test_persist_tool_call_guard_and_exception(monkeypatch: Any) -> None:
         output_result=None,
         error_message=None,
         latency_ms=None,
+        access_token=None,
     )
 
     model_context.persistence_client = SimpleNamespace(
-        enabled=True, rpc_client=object()
+        enabled=True,
+        rpc_client=object(),
+        rpc_client_for_role=lambda *_args, **_kwargs: object(),
     )
     create_tool_call = MagicMock(side_effect=RuntimeError("tool fail"))
     monkeypatch.setattr("python_chat.chat.db.create_tool_call", create_tool_call)
@@ -117,6 +162,7 @@ def test_persist_tool_call_guard_and_exception(monkeypatch: Any) -> None:
         output_result={"b": 2},
         error_message=None,
         latency_ms=10,
+        access_token="tok",
     )
 
     assert create_tool_call.called

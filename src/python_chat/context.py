@@ -154,6 +154,19 @@ class ModelContext:
     def set_user_id(self, user_id: str | None) -> None:
         self._user_id = user_id
 
+    def _resolve_user_rpc_client(self, access_token: str | None) -> Any:
+        if not self._persistence_client:
+            return None
+
+        if hasattr(self._persistence_client, "rpc_client_for_role"):
+            return self._persistence_client.rpc_client_for_role(
+                "user",
+                access_token=access_token,
+            )
+
+        # Backward compatibility for tests that still pass minimal doubles.
+        return getattr(self._persistence_client, "rpc_client", None)
+
     def ensure_session(self, mode: str) -> int | None:
         """Ensure a chat session exists in the database for the current user and mode."""
         session_id, session_mode = self.ensure_session_for(
@@ -161,6 +174,7 @@ class ModelContext:
             user_id=self._user_id,
             current_session_id=self._session_id,
             current_session_mode=self._session_mode,
+            access_token=None,
         )
         self._session_id = session_id
         self._session_mode = session_mode
@@ -173,6 +187,7 @@ class ModelContext:
         user_id: str | None,
         current_session_id: int | None,
         current_session_mode: str | None,
+        access_token: str | None = None,
     ) -> tuple[int | None, str | None]:
         """Resolve or create a chat session for explicit per-request state."""
         if current_session_id is not None and current_session_mode == mode:
@@ -184,10 +199,17 @@ class ModelContext:
         if not user_id:
             return None, current_session_mode
 
+        user_rpc_client = self._resolve_user_rpc_client(access_token)
+        if user_rpc_client is None:
+            logger.warning(
+                "No user-scoped RPC client is available for session creation"
+            )
+            return None, current_session_mode
+
         try:
             created_session = ChatSession(user_id=user_id, mode=mode)
             new_session_id = db.create_chat_session(
-                self._persistence_client.rpc_client,
+                user_rpc_client,
                 created_session,
             )
             return new_session_id, mode
@@ -196,17 +218,29 @@ class ModelContext:
             return None, current_session_mode
 
     def complete_session(self) -> None:
-        self.complete_session_for(self._session_id)
+        self.complete_session_for(self._session_id, access_token=None)
 
-    def complete_session_for(self, session_id: int | None) -> None:
+    def complete_session_for(
+        self,
+        session_id: int | None,
+        *,
+        access_token: str | None = None,
+    ) -> None:
         if not self._persistence_client or not self._persistence_client.enabled:
             return
         if session_id is None:
             return
 
+        user_rpc_client = self._resolve_user_rpc_client(access_token)
+        if user_rpc_client is None:
+            logger.warning(
+                "No user-scoped RPC client is available for session completion"
+            )
+            return
+
         try:
             db.complete_chat_session(
-                self._persistence_client.rpc_client,
+                user_rpc_client,
                 session_id,
                 datetime.now(timezone.utc).isoformat(),
             )

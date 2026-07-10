@@ -1,7 +1,8 @@
 import os
 
-from dotenv import load_dotenv
 from xai_sdk import Client
+
+from python_chat.dotenv_loader import load_env_file
 
 
 class Models:
@@ -12,7 +13,7 @@ class Models:
     COMPLEX_QUESTIONS = "grok-4.3"
 
 
-def init_api(api_key_name: str, api_url: str | None = None) -> Client:
+def init_api(api_key: str, api_url: str | None = None) -> Client:
     """Initialize the xAI Client.
 
     The xai-sdk Client reads XAI_API_KEY from the environment by default and
@@ -21,12 +22,11 @@ def init_api(api_key_name: str, api_url: str | None = None) -> Client:
     gRPC endpoint internally).
 
     Args:
-        api_key_name (str): Environment variable name for the API key.
+        api_key (str): The API key value.
         api_url (str | None): Ignored; kept for backward compatibility.
 
     Returns:
         Client: Configured xAI SDK client instance.
     """
-    load_dotenv()
-    api_key = os.getenv(api_key_name)
+    load_env_file()
     return Client(api_key=api_key)

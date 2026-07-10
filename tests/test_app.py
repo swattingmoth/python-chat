@@ -46,6 +46,9 @@ class _FakeComponent:
 
 
 class _FakeGr:
+    class Request:
+        pass
+
     def __init__(self) -> None:
         self.registry: dict[str, list[dict[str, Any]]] = {
             "change": [],
@@ -258,3 +261,51 @@ def test_launch_app_shutdown_handles_runtime_error(monkeypatch: Any) -> None:
     registered[0]()
 
     model_context.complete_session.assert_called_once()
+
+
+def test_launch_app_uses_identity_resolver_for_runtime(monkeypatch: Any) -> None:
+    fake_gr = _FakeGr()
+    model_context = SimpleNamespace(
+        user_id=None,
+        persistence_client=None,
+        log_queue=None,
+        register_tool=MagicMock(),
+        remove_tool=MagicMock(),
+        complete_session_for=MagicMock(),
+        complete_session=MagicMock(),
+    )
+
+    monkeypatch.setattr(app_module, "gr", fake_gr)
+    monkeypatch.setattr(app_module.ModelContext, "current", lambda: model_context)  # type: ignore
+    monkeypatch.setattr(app_module, "ChatInterface", _FakeChatInterface)
+
+    app_module.launch_app(identity_resolver=lambda _request: ("user-abc", "tok-xyz"))
+
+    on_choice_change = fake_gr.registry["change"][0]["fn"]
+    _, state = on_choice_change("Question", {})
+    assert state["user_id"] == "user-abc"
+    assert state["access_token"] == "tok-xyz"
+
+
+def test_launch_app_ignores_blank_state_identity_values(monkeypatch: Any) -> None:
+    fake_gr = _FakeGr()
+    model_context = SimpleNamespace(
+        user_id=None,
+        persistence_client=None,
+        log_queue=None,
+        register_tool=MagicMock(),
+        remove_tool=MagicMock(),
+        complete_session_for=MagicMock(),
+        complete_session=MagicMock(),
+    )
+
+    monkeypatch.setattr(app_module, "gr", fake_gr)
+    monkeypatch.setattr(app_module.ModelContext, "current", lambda: model_context)  # type: ignore
+    monkeypatch.setattr(app_module, "ChatInterface", _FakeChatInterface)
+
+    app_module.launch_app(identity_resolver=lambda _request: ("user-abc", "tok-xyz"))
+
+    on_choice_change = fake_gr.registry["change"][0]["fn"]
+    _, state = on_choice_change("Question", {"user_id": "", "access_token": "  "})
+    assert state["user_id"] == "user-abc"
+    assert state["access_token"] == "tok-xyz"

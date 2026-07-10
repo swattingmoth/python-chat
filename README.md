@@ -129,8 +129,8 @@ uv run python -c "from python_chat import hello_world; print(hello_world())"
    XAI_API_KEY=your_xai_key_here
    IMAGE_FOLDER=c:/temp/images   # or any writable dir; will be created if needed
    SUPABASE_URL=https://<project-ref>.supabase.co
+   SUPABASE_ANON_KEY=your_anon_key
    SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-   SUPABASE_AUTH_USER_ID=<auth.users.id uuid>   # required for session/message RLS writes
    ```
 
 2. Launch:
@@ -153,6 +153,44 @@ The UI lets you choose modes:
 Images are saved as UUID-named PNGs under `IMAGE_FOLDER`.
 If Supabase env vars are configured, image bytes are also uploaded to the `images`
 storage bucket and detailed chat logs are batched to `chat-logs` as JSONL.
+
+### Running the FastAPI Host (Auth-Protected Gradio)
+
+Use this mode when deploying behind Supabase bearer-token auth (recommended for Hugging Face Docker Spaces).
+
+1. Ensure the same `.env` values as above are set.
+2. Start the API server:
+
+    ```bash
+    uv run uvicorn python_chat.server:app --host 0.0.0.0 --port 7860
+    ```
+
+3. Access the Gradio app via `/app` and provide an `Authorization: Bearer <token>` header.
+
+Behavioral notes:
+- `XAI_API_KEY` is resolved from Supabase Vault using service-role execution only.
+- Chat session/message/tool persistence uses user-scoped execution (anon key + bearer token).
+- If a user-scoped token is missing for chat persistence, writes fail closed (no automatic service-role escalation).
+
+### Docker (Hugging Face Space)
+
+Build and run locally:
+
+```bash
+docker build -t python-chat .
+docker run --rm -p 7860:7860 \
+   -e PORT=7860 \
+   -e CHATBOT_ENV=production \
+   -e SUPABASE_URL=https://<project-ref>.supabase.co \
+   -e SUPABASE_ANON_KEY=<anon-key> \
+   -e SUPABASE_SERVICE_ROLE_KEY=<service-role-key> \
+   -e IMAGE_FOLDER=/tmp/images \
+   python-chat
+```
+
+Health checks:
+- `/healthz` returns process liveness.
+- `/readyz` confirms model context initialization.
 
 ## Architecture & Extending
 
@@ -183,6 +221,7 @@ See `.github/copilot-instructions.md` for full development rules.
 | `uv add <pkg>`                   | Add runtime dependency                           |
 | `uv add --group dev <pkg>`       | Add dev-only tool (pytest, mypy, etc.)           |
 | `uv run python -m python_chat.chatbot` | Launch the Gradio chatbot UI              |
+| `uv run uvicorn python_chat.server:app --host 0.0.0.0 --port 7860` | Launch the auth-protected FastAPI host |
 
 ## VS Code Integration
 

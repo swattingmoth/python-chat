@@ -1,19 +1,104 @@
 from __future__ import annotations
 
-import queue
-from datetime import datetime, timezone
 import json
 import logging
 import os
-from pathlib import Path
+import queue
 import threading
-from typing import Any
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Literal
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from uuid import uuid4
 
 from python_chat.persistence import db
 from python_chat.persistence.models import QueueEvent
 
 logger = logging.getLogger(__name__)
+
+PersistenceRole = Literal["service", "user"]
+
+
+def _normalize_config_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = value.strip()
+    return normalized if normalized else None
+
+
+class HttpRpcClient:
+    """Simple PostgREST RPC client for explicit role-scoped execution."""
+
+    def __init__(
+        self,
+        *,
+        url: str,
+        api_key: str,
+        access_token: str | None = None,
+    ) -> None:
+        self._url = url.rstrip("/")
+        self._api_key = api_key
+        self._access_token = access_token
+
+    def rpc(self, fn: str, params: dict[str, Any]) -> "HttpRpcCall":
+        return HttpRpcCall(
+            url=self._url,
+            fn=fn,
+            params=params,
+            api_key=self._api_key,
+            access_token=self._access_token,
+        )
+
+
+class HttpRpcCall:
+    def __init__(
+        self,
+        *,
+        url: str,
+        fn: str,
+        params: dict[str, Any],
+        api_key: str,
+        access_token: str | None,
+    ) -> None:
+        self._url = url
+        self._fn = fn
+        self._params = params
+        self._api_key = api_key
+        self._access_token = access_token
+
+    def execute(self) -> Any:
+        endpoint = f"{self._url}/rest/v1/rpc/{self._fn}"
+        body = json.dumps(self._params).encode("utf-8")
+        bearer_token = self._access_token or self._api_key
+        headers = {
+            "Content-Type": "application/json",
+            "apikey": self._api_key,
+            "Authorization": f"Bearer {bearer_token}",
+        }
+        request = urllib_request.Request(
+            endpoint,
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with urllib_request.urlopen(request, timeout=10) as response:
+                payload = response.read().decode("utf-8")
+                data = json.loads(payload) if payload else None
+                return SimpleNamespace(data=data)
+        except urllib_error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"RPC '{self._fn}' failed with status {exc.code}: {details}"
+            ) from exc
+        except urllib_error.URLError as exc:
+            raise RuntimeError(
+                f"RPC '{self._fn}' request failed: {exc.reason}"
+            ) from exc
 
 
 class SupabaseClient:
@@ -24,13 +109,23 @@ class SupabaseClient:
         *,
         url: str | None = None,
         key: str | None = None,
+        anon_key: str | None = None,
         user_id: str | None = None,
         client: Any = None,
     ) -> None:
-        self._url = url or os.getenv("SUPABASE_URL")
-        self._key = key or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        self.user_id = user_id or os.getenv("SUPABASE_AUTH_USER_ID")
+        self._url = _normalize_config_value(url or os.getenv("SUPABASE_URL"))
+        self._key = _normalize_config_value(
+            key or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        )
+        self._anon_key = _normalize_config_value(
+            anon_key or os.getenv("SUPABASE_ANON_KEY")
+        )
+        self.user_id = _normalize_config_value(
+            user_id or os.getenv("SUPABASE_AUTH_USER_ID")
+        )
         self._client = client
+        self._user_rpc_clients: dict[str, HttpRpcClient] = {}
+        self._service_rpc_client: Any = None
 
         if self._client is None and self._url and self._key:
             try:
@@ -45,13 +140,44 @@ class SupabaseClient:
                 logger.warning("Failed to initialize Supabase client: %s", exc)
                 self._client = None
 
+        if self._client is not None and hasattr(self._client, "rpc"):
+            self._service_rpc_client = self._client
+        elif self._url and self._key:
+            self._service_rpc_client = HttpRpcClient(url=self._url, api_key=self._key)
+
     @property
     def enabled(self) -> bool:
-        return self._client is not None
+        return self._service_rpc_client is not None
 
     @property
     def rpc_client(self) -> Any:
-        return self._client
+        return self.rpc_client_for_role("service")
+
+    def rpc_client_for_role(
+        self,
+        role: PersistenceRole,
+        *,
+        access_token: str | None = None,
+    ) -> Any:
+        if role == "service":
+            return self._service_rpc_client
+
+        normalized_token = _normalize_config_value(access_token)
+
+        if not self._url or not self._anon_key or not normalized_token:
+            return None
+
+        cached = self._user_rpc_clients.get(normalized_token)
+        if cached is not None:
+            return cached
+
+        scoped_client = HttpRpcClient(
+            url=self._url,
+            api_key=self._anon_key,
+            access_token=normalized_token,
+        )
+        self._user_rpc_clients[normalized_token] = scoped_client
+        return scoped_client
 
     def upload_bytes(
         self,

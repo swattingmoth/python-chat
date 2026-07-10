@@ -9,11 +9,10 @@ import os
 
 os.environ["XAI_SDK_DISABLE_TRACING"] = "true"
 
-from dotenv import load_dotenv
-
 from python_chat.api import init_api
 from python_chat.app import configure_logging, launch_app
 from python_chat.context import ModelContext
+from python_chat.dotenv_loader import load_env_file
 from python_chat.persistence import AsyncLogQueue, SupabaseClient, db
 from python_chat.utils import get_environment
 
@@ -30,41 +29,45 @@ def _resolve_xai_api_key(persistence_client: SupabaseClient) -> str:
     raise RuntimeError("XAI_API_KEY is not configured. Set XAI_API_KEY vault secret.")
 
 
+def initialize_runtime() -> ModelContext:
+    logger = logging.getLogger()
+
+    image_folder = os.getenv("IMAGE_FOLDER") or ""
+    if not image_folder and get_environment() == "development":
+        raise Exception("IMAGE_FOLDER environment variable is not set.")
+
+    logger.info(f"Starting in environment: {get_environment()}")
+
+    persistence_client = SupabaseClient()
+    log_queue: AsyncLogQueue | None
+    if persistence_client.enabled:
+        log_queue = AsyncLogQueue(persistence_client)
+        resolved_persistence_client: SupabaseClient | None = persistence_client
+    else:
+        logger.warning(
+            "Supabase client is not configured; persistence and storage uploads are disabled."
+        )
+        log_queue = None
+        resolved_persistence_client = None
+
+    xai_api_key = _resolve_xai_api_key(persistence_client)
+    client = init_api(xai_api_key, "https://api.x.ai/v1")
+
+    return ModelContext.create(
+        client,
+        image_folder,
+        persistence_client=resolved_persistence_client,
+        log_queue=log_queue,
+    )
+
+
 if __name__ == "__main__":
-    load_dotenv()
+    load_env_file()
     configure_logging()
     logger = logging.getLogger()
 
     try:
-
-        image_folder = os.getenv("IMAGE_FOLDER") or ""
-        if not image_folder and get_environment() == "development":
-            raise Exception("IMAGE_FOLDER environment variable is not set.")
-
-        logger.info(f"Starting in environment: {get_environment()}")
-
-        persistence_client = SupabaseClient()
-        log_queue: AsyncLogQueue | None
-        if persistence_client.enabled:
-            log_queue = AsyncLogQueue(persistence_client)
-            resolved_persistence_client: SupabaseClient | None = persistence_client
-        else:
-            logger.warning(
-                "Supabase client is not configured; persistence and storage uploads are disabled."
-            )
-            log_queue = None
-            resolved_persistence_client = None
-
-        xai_api_key = _resolve_xai_api_key(persistence_client)
-        os.environ["XAI_API_KEY"] = xai_api_key
-        client = init_api("XAI_API_KEY", "https://api.x.ai/v1")
-
-        ModelContext.create(
-            client,
-            image_folder,
-            persistence_client=resolved_persistence_client,
-            log_queue=log_queue,
-        )
+        initialize_runtime()
         app = launch_app()
         app.launch()
     except Exception as e:

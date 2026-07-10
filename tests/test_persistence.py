@@ -316,7 +316,7 @@ def test_supabase_client_init_warns_on_unexpected_type_and_handles_import_error(
 
     monkeypatch.setattr("builtins.__import__", _raise_import)
     import_fail_client = SupabaseClient(url="https://example.test", key="service-key")
-    assert import_fail_client.enabled is False
+    assert import_fail_client.enabled is True
 
 
 def test_start_worker_and_local_image_copy(tmp_path: Path) -> None:
@@ -339,7 +339,12 @@ def test_start_worker_and_local_image_copy(tmp_path: Path) -> None:
 def test_supabase_rpc_client_property_exposes_client() -> None:
     from python_chat.persistence import SupabaseClient
 
-    runtime_client = _FakeSupabaseRuntimeClient()
+    class _RuntimeRpcClient(_FakeSupabaseRuntimeClient):
+        def rpc(self, fn: str, params: dict[str, Any]) -> _FakeRpcCall:
+            del fn, params
+            return _FakeRpcCall(None)
+
+    runtime_client = _RuntimeRpcClient()
     client = SupabaseClient(client=runtime_client)
     assert client.rpc_client is runtime_client
 
@@ -420,3 +425,28 @@ def test_async_log_queue_covers_timeout_empty_flush_and_upload_failure() -> None
     queue.enqueue(build_log_event(1, {"x": 1}))
     queue.start()
     queue.stop()
+
+
+def test_supabase_client_rpc_role_routing(monkeypatch: Any) -> None:
+    from python_chat.persistence import SupabaseClient
+
+    class _RuntimeRpcClient(_FakeSupabaseRuntimeClient):
+        def rpc(self, fn: str, params: dict[str, Any]) -> _FakeRpcCall:
+            del fn, params
+            return _FakeRpcCall(None)
+
+    runtime_client = _RuntimeRpcClient()
+    client = SupabaseClient(client=runtime_client)
+
+    assert client.rpc_client_for_role("service") is runtime_client
+    assert client.rpc_client_for_role("user", access_token=None) is None
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.test")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    with_user = SupabaseClient(client=runtime_client)
+    user_rpc_one = with_user.rpc_client_for_role("user", access_token="token-1")
+    user_rpc_two = with_user.rpc_client_for_role("user", access_token="token-1")
+
+    assert user_rpc_one is not None
+    assert user_rpc_two is user_rpc_one
