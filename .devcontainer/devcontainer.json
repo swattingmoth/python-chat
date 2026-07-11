@@ -13,7 +13,7 @@
 		"dockerfile": "../Dockerfile"
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/node:1": {},
+		"ghcr.io/devcontainers/features/node:2": {},
 		"ghcr.io/devcontainer-config/features/dot-config:4": {}
 	},
 	"mounts": [
