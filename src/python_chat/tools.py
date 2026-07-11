@@ -100,6 +100,7 @@ class Tools:
                 pname
                 for pname, p in sig.parameters.items()
                 if p.default is inspect.Parameter.empty
+                and p.name != "tool_call_id"
                 and p.kind
                 not in (
                     inspect.Parameter.VAR_POSITIONAL,

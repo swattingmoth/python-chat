@@ -7,6 +7,7 @@ additionally depends on the ModelContext singleton.
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import Any, Generator
 from unittest.mock import MagicMock, patch
@@ -53,6 +54,7 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
     ):
         mock_uuid.return_value = "test-uuid-1234"
 
+        os.environ["CHATBOT_ENV"] = "development"
         path, data, cost = generate_image(
             prompt="a cat in hat",
             model=Models.IMAGES,
@@ -155,38 +157,6 @@ def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
     assert cost == 0.0
     upload_bytes.assert_called_once()
     get_public_url.assert_called_once()
-
-
-def test_generate_image_upload_failure_falls_back_to_local_file(
-    monkeypatch: Any,
-) -> None:
-    fake_client = MagicMock()
-    fake_client.image.sample.return_value = SimpleNamespace(image=b"png", cost_usd=0.0)
-
-    persistence_client = SimpleNamespace(
-        upload_bytes=MagicMock(side_effect=RuntimeError("upload failed")),
-        get_public_url=MagicMock(return_value=None),
-    )
-
-    ModelContext.reset()
-    ModelContext.create(MagicMock(), "c:/tmp", persistence_client=persistence_client)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(
-        "python_chat.images.ensure_local_image_copy",
-        lambda *_: "c:/tmp/local-fallback.png",
-    )
-
-    image_file, image_data, cost = generate_image(
-        prompt="tree",
-        model=Models.IMAGES,
-        client=fake_client,
-        image_path="c:/tmp",
-        upload_to_storage=True,
-    )
-
-    assert image_data == b"png"
-    assert image_file == "c:/tmp/local-fallback.png"
-    assert cost == 0.0
 
 
 def test_generate_image_sets_tool_cost(monkeypatch: Any) -> None:

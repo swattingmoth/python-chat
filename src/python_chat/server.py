@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import os
 from typing import Any
@@ -124,10 +125,10 @@ def _authenticate_supabase_password(
 
 
 def _login_page_html(next_path: str, error: str | None = None) -> str:
-    escaped_next = next_path.replace('"', "")
+    escaped_next = html.escape(next_path, quote=True)
     error_block = ""
     if error:
-        escaped_error = error.replace("<", "").replace(">", "")
+        escaped_error = html.escape(error, quote=True)
         error_block = (
             f"<p style='color:#b00020;margin-bottom:12px;'>{escaped_error}</p>"
         )

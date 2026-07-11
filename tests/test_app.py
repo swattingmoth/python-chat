@@ -136,7 +136,10 @@ def test_configure_logging_uses_root_handlers_for_local_and_server(
     monkeypatch.setattr(app_module.logging, "StreamHandler", stream_handler)  # type: ignore
     monkeypatch.setattr(app_module.logging, "getLogger", lambda *_: root_logger)  # type: ignore
 
-    app_module.configure_logging(logfile_path=None, log_to_console=True)
+    monkeypatch.setenv("CHATBOT_ENV", "development")
+    app_module.configure_logging(
+        logfile_path=None, log_to_console=True, log_to_file=True
+    )
     monkeypatch.setenv("CHATBOT_ENV", "production")
     app_module.configure_logging(logfile_path="c:/tmp/chat.log", log_to_console=False)
 

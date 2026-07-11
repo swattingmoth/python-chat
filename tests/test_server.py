@@ -57,10 +57,13 @@ def test_cookie_secure_flag_respects_env(monkeypatch: Any) -> None:
 
     monkeypatch.delenv("COOKIE_SECURE", raising=False)
     monkeypatch.delenv("CHATBOT_ENV", raising=False)
-    assert _cookie_secure_flag() is False
+    assert _cookie_secure_flag() is True
 
     monkeypatch.setenv("CHATBOT_ENV", "production")
     assert _cookie_secure_flag() is True
+
+    monkeypatch.setenv("CHATBOT_ENV", "development")
+    assert _cookie_secure_flag() is False
 
     monkeypatch.setenv("COOKIE_SECURE", "true")
     assert _cookie_secure_flag() is True

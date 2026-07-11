@@ -58,8 +58,8 @@ python-chat/
 
 - Python >= 3.13
 - [uv](https://docs.astral.sh/uv/) (v0.4+ recommended)
-- An xAI API key (set as `XAI_API_KEY` in `.env`)
 - `IMAGE_FOLDER` env var (directory for generated images, e.g. `c:/temp/images`)
+- Instance of supabase running locally with XAI_API_KEY set as secret in vault
 
 ### Setup (one-time)
 
@@ -126,7 +126,6 @@ uv run python -c "from python_chat import hello_world; print(hello_world())"
 1. Create a `.env` file in the project root:
 
    ```
-   XAI_API_KEY=your_xai_key_here
    IMAGE_FOLDER=c:/temp/images   # or any writable dir; will be created if needed
    SUPABASE_URL=https://<project-ref>.supabase.co
    SUPABASE_ANON_KEY=your_anon_key

@@ -21,7 +21,7 @@ def generate_image(
     image_path: str,
     *,
     upload_to_storage: bool = True,
-) -> tuple[str, bytes, float]:
+) -> tuple[str | None, bytes, float]:
     """Generate an image using the xAI image API and save it locally.
 
     A safety system prompt is prepended to the user prompt to guide generation.
@@ -54,7 +54,7 @@ def generate_image(
     image_data: bytes = image_response.image
     image_name = f"{uuid.uuid4()}.png"
     image_cost = image_response.cost_usd or 0.0
-    image_file = ""
+    image_file = None
     if get_environment() == "development":
         image_file = ensure_local_image_copy(image_path, image_name, image_data)
         logger.info(f"Generated image saved to {image_file}")
@@ -82,6 +82,11 @@ def generate_image(
         except Exception as exc:
             logger.warning("Image upload to storage failed: %s", exc)
 
+    if not image_file:
+        logger.warning(
+            "Image file path is None. Image was not saved locally or uploaded to storage."
+        )
+
     return (image_file, image_data, image_cost)
 
 
@@ -101,8 +106,12 @@ def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
     # ) as f:
     #     image_data = f.read()
 
+    content_for_model = "Generated image"
+    if image_file:
+        content_for_model += f" {os.path.basename(image_file)}"
+
     return ToolResult(
-        content_for_model=f"Generated image {os.path.basename(image_file)}",
+        content_for_model=content_for_model,
         content=image_data,
         content_type="image",
         tool_call_id=tool_call_id,

@@ -1,5 +1,3 @@
-import os
-
 from xai_sdk import Client
 
 from python_chat.dotenv_loader import load_env_file
