@@ -159,3 +159,6 @@ Thumbs.db
 # local configuration files
 config.json
 .env
+
+# node modules
+node_modules/

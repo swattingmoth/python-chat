@@ -1,0 +1,1 @@
+grant execute on function public.create_tool_call(bigint, text, text, jsonb, jsonb, text, integer, numeric) to authenticated;

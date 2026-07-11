@@ -1,7 +1,7 @@
 [project]
 name = "python-chat"
 version = "0.1.0"
-description = "Python project skeleton for an LLM chatbot. Features pytest testing, strict mypy type checking, uv for fast dependency management, and src/ layout."
+description = "Production-grade LLM chatbot using xAI SDK (native, not compat). Streaming + tools (client/server) + image gen + Gradio UI. Full type safety (mypy strict), tests for every public API, uv packaging."
 readme = "README.md"
 authors = [
     { name = "swattingmoth", email = "swattingmoth@gmail.com" }
@@ -9,10 +9,15 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "attrs>=26.1.0",
-    "dotenv>=0.9.9",
+    "python-dotenv>=1.0.1",
+    "fastapi>=0.121.0",
     "gradio>=6.14.0",
-    "openai>=2.38.0",
+    "pydantic>=2.11.0",
+    "protobuf>=6.33.6",
     "python-env>=1.0.0",
+    "supabase>=2.18.1",
+    "uvicorn>=0.38.0",
+    "xai-sdk>=1.15.0",
 ]
 
 [build-system]
@@ -23,6 +28,9 @@ build-backend = "uv_build"
 dev = [
     "pytest>=8.3.0",
     "mypy>=1.13.0",
+    "pytest-cov>=7.1.0",
+    "types-protobuf>=7.34.1.20260518",
+    "ruff>=0.15.20",
 ]
 
 [tool.pytest.ini_options]
@@ -37,6 +45,7 @@ strict = true
 warn_unused_ignores = true
 disallow_untyped_decorators = true
 mypy_path = ["src"]
-# Run with: uv run mypy src
-# or after install: uv run mypy
+[[tool.mypy.overrides]]
+module = ["xai_sdk", "xai_sdk.*"]
+ignore_missing_imports = true
 

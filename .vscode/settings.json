@@ -41,5 +41,9 @@
     },
 
     // Future: Ruff, isort etc. when added
-    "ruff.importStrategy": "fromEnvironment"
+    "ruff.importStrategy": "fromEnvironment",
+    "chat.tools.terminal.autoApprove": {
+        "uv": true
+    },
+    "python-envs.defaultEnvManager": "ms-python.python:venv"
 }
