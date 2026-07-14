@@ -138,7 +138,7 @@ dmypy.json
 cython_debug/
 
 # UV / project specific
-uv.lock
+# uv.lock
 # Note: uv.lock is often committed for reproducibility; uncomment above to ignore if preferred
 
 # IDE / editors
