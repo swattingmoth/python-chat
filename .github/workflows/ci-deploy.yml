@@ -58,13 +58,13 @@ jobs:
           node-version: "20"
 
       - name: Validate SUPABASE_DB_URL secret
-         env:
-           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-         run: |
-           if [ -z "${SUPABASE_DB_URL:-}" ]; then
-             echo "SUPABASE_DB_URL secret is not set"
-             exit 1
-           fi
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "SUPABASE_DB_URL secret is not set"
+            exit 1
+          fi
 
       - name: Apply Supabase migrations
         env:
