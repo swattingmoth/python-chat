@@ -48,4 +48,9 @@ mypy_path = ["src"]
 [[tool.mypy.overrides]]
 module = ["xai_sdk", "xai_sdk.*"]
 ignore_missing_imports = true
+[[tool.mypy.overrides]]
+module = ["dotenv", "dotenv.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
 
