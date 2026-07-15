@@ -67,15 +67,22 @@ jobs:
           import socket
           from urllib.parse import quote, urlsplit, urlunsplit
 
+          def parse_postgres_url(secret_name: str, value: str) -> object:
+              parts = urlsplit(value)
+              if parts.scheme not in {"postgres", "postgresql"} or parts.hostname is None:
+                  raise SystemExit(
+                      f"{secret_name} must be a valid PostgreSQL connection string."
+                  )
+              return parts
+
           pooler_url = os.environ.get("SUPABASE_POOLER_DB_URL", "").strip()
           direct_url = os.environ.get("SUPABASE_DB_URL", "").strip()
 
           if pooler_url:
+              parse_postgres_url("SUPABASE_POOLER_DB_URL", pooler_url)
               resolved_url = pooler_url
           elif direct_url:
-              parts = urlsplit(direct_url)
-              if parts.hostname is None:
-                  raise SystemExit("SUPABASE_DB_URL must include a hostname.")
+              parts = parse_postgres_url("SUPABASE_DB_URL", direct_url)
 
               try:
                   ipv4_info = socket.getaddrinfo(
@@ -99,6 +106,7 @@ jobs:
                       "IPv4 pooler connection string."
                   )
 
+              # getaddrinfo returns (family, type, proto, canonname, sockaddr).
               ip_address = ipv4_info[0][4][0]
 
               resolved_userinfo = ""
