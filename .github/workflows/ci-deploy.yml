@@ -57,20 +57,68 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Validate SUPABASE_DB_URL secret
+      - name: Select Supabase deployment DB URL
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_POOLER_DB_URL: ${{ secrets.SUPABASE_POOLER_DB_URL }}
         run: |
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "SUPABASE_DB_URL secret is not set"
-            exit 1
-          fi
+          python3 <<'PY'
+          import os
+          import socket
+          from urllib.parse import urlsplit, urlunsplit
+
+          pooler_url = os.environ.get("SUPABASE_POOLER_DB_URL", "").strip()
+          direct_url = os.environ.get("SUPABASE_DB_URL", "").strip()
+
+          if pooler_url:
+              resolved_url = pooler_url
+          elif direct_url:
+              parts = urlsplit(direct_url)
+              if parts.hostname is None:
+                  raise SystemExit("SUPABASE_DB_URL must include a hostname.")
+
+              try:
+                  ipv4_info = socket.getaddrinfo(
+                      parts.hostname,
+                      parts.port or 5432,
+                      socket.AF_INET,
+                      socket.SOCK_STREAM,
+                  )
+              except socket.gaierror as exc:
+                  raise SystemExit(
+                      "GitHub-hosted runners could not resolve an IPv4 address for "
+                      f"{parts.hostname}. Set SUPABASE_POOLER_DB_URL to Supabase's "
+                      "IPv4 pooler connection string. "
+                      f"Original resolution error: {exc}."
+                  ) from exc
+
+              resolved_url = urlunsplit(
+                  (
+                      parts.scheme,
+                      parts.netloc.replace(parts.hostname, ipv4_info[0][4][0], 1),
+                      parts.path,
+                      parts.query,
+                      parts.fragment,
+                  )
+              )
+          else:
+              raise SystemExit(
+                  "Set SUPABASE_POOLER_DB_URL (preferred for GitHub Actions) or "
+                  "SUPABASE_DB_URL."
+              )
+
+          github_env = os.environ.get("GITHUB_ENV")
+          if github_env is None:
+              raise SystemExit("GITHUB_ENV is not available.")
+
+          print(f"::add-mask::{resolved_url}")
+          with open(github_env, "a", encoding="utf-8") as env_file:
+              env_file.write(f"SUPABASE_DEPLOY_DB_URL={resolved_url}\n")
+          PY
 
       - name: Apply Supabase migrations
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          npx --yes supabase@2.106.0 db push --db-url "$SUPABASE_DB_URL"
+          npx --yes supabase@2.106.0 db push --db-url "$SUPABASE_DEPLOY_DB_URL"
 
       - name: Install PostgreSQL client
         run: |
@@ -78,10 +126,8 @@ jobs:
           sudo apt-get install --yes postgresql-client
 
       - name: Ensure storage buckets exist
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          psql "$SUPABASE_DEPLOY_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
           insert into storage.buckets (
             id,
             name,
