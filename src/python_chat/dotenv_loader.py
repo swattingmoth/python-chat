@@ -1,5 +1,3 @@
-# type: ignore
-# ignore mypy errors in this file due to an issue with dotenv in github workwflows
 from __future__ import annotations
 
 import logging
