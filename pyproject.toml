@@ -50,7 +50,7 @@ module = ["xai_sdk", "xai_sdk.*"]
 ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["dotenv", "dotenv.*"]
-ignore_errors = true
+follow_imports = "skip"
 ignore_missing_imports = true
 
 
