@@ -57,7 +57,7 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Select Supabase deployment DB URL
+      - name: Resolve IPv4-capable Supabase deployment DB URL
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_POOLER_DB_URL: ${{ secrets.SUPABASE_POOLER_DB_URL }}
@@ -65,7 +65,7 @@ jobs:
           python3 <<'PY'
           import os
           import socket
-          from urllib.parse import urlsplit, urlunsplit
+          from urllib.parse import quote, urlsplit, urlunsplit
 
           pooler_url = os.environ.get("SUPABASE_POOLER_DB_URL", "").strip()
           direct_url = os.environ.get("SUPABASE_DB_URL", "").strip()
@@ -99,11 +99,18 @@ jobs:
                       "IPv4 pooler connection string."
                   )
 
-              raw_userinfo = ""
-              if "@" in parts.netloc:
-                  raw_userinfo = f"{parts.netloc.rsplit('@', 1)[0]}@"
+              _, _, _, _, (ip_address, _) = ipv4_info[0]
 
-              resolved_netloc = f"{raw_userinfo}{ipv4_info[0][4][0]}"
+              resolved_userinfo = ""
+              if parts.username is not None:
+                  resolved_userinfo = quote(parts.username, safe="")
+                  if parts.password is not None:
+                      resolved_userinfo = (
+                          f"{resolved_userinfo}:{quote(parts.password, safe='')}"
+                      )
+                  resolved_userinfo = f"{resolved_userinfo}@"
+
+              resolved_netloc = f"{resolved_userinfo}{ip_address}"
               if parts.port is not None:
                   resolved_netloc = f"{resolved_netloc}:{parts.port}"
 
