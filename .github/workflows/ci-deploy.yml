@@ -106,8 +106,10 @@ jobs:
                       "IPv4 pooler connection string."
                   )
 
-              # getaddrinfo returns (family, type, proto, canonname, sockaddr).
-              ip_address = ipv4_info[0][4][0]
+              # getaddrinfo returns (family, type, proto, canonname, sockaddr),
+              # and sockaddr for AF_INET is (address, port).
+              sockaddr = ipv4_info[0][4]
+              ip_address = sockaddr[0]
 
               resolved_userinfo = ""
               if parts.username is not None:
@@ -144,7 +146,7 @@ jobs:
                   "should provide it automatically for workflow steps."
               )
 
-          for value in (item for item in (direct_url, pooler_url, resolved_url) if item):
+          for value in filter(None, (direct_url, pooler_url, resolved_url)):
               print(f"::add-mask::{value}")
           with open(github_env, "a", encoding="utf-8") as env_file:
               env_file.write(f"SUPABASE_DEPLOY_DB_URL={resolved_url}\n")
