@@ -34,7 +34,7 @@ jobs:
         run: uv run pytest -q
 
       - name: Run mypy
-        run: uv run mypy src
+        run: uv run mypy --python-executable .venv/bin/python src
 
       - name: Run ruff
         run: uv run ruff check .
