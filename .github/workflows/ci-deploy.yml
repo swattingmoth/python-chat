@@ -57,7 +57,7 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Resolve IPv4-capable Supabase deployment DB URL
+      - name: Prepare IPv4-compatible DB URL
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_POOLER_DB_URL: ${{ secrets.SUPABASE_POOLER_DB_URL }}
@@ -99,7 +99,7 @@ jobs:
                       "IPv4 pooler connection string."
                   )
 
-              _, _, _, _, (ip_address, _) = ipv4_info[0]
+              ip_address = ipv4_info[0][4][0]
 
               resolved_userinfo = ""
               if parts.username is not None:
@@ -131,7 +131,10 @@ jobs:
 
           github_env = os.environ.get("GITHUB_ENV")
           if github_env is None:
-              raise SystemExit("GITHUB_ENV is not available.")
+              raise SystemExit(
+                  "GITHUB_ENV environment variable not found. GitHub Actions "
+                  "should provide it automatically for workflow steps."
+              )
 
           for value in (direct_url, pooler_url, resolved_url):
               if value:
