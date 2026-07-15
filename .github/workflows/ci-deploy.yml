@@ -34,8 +34,6 @@ jobs:
         run: uv run pytest -q
 
       - name: Run mypy
-        env:
-          MYPYPATH: src:.venv/lib/python3.13/site-packages
         run: uv run mypy --python-executable .venv/bin/python src
 
       - name: Run ruff
