@@ -65,9 +65,9 @@ jobs:
           python3 <<'PY'
           import os
           import socket
-          from urllib.parse import quote, urlsplit, urlunsplit
+          from urllib.parse import SplitResult, quote, urlsplit, urlunsplit
 
-          def parse_postgres_url(secret_name: str, value: str) -> object:
+          def parse_postgres_url(secret_name: str, value: str) -> SplitResult:
               parts = urlsplit(value)
               if parts.scheme not in {"postgres", "postgresql"} or parts.hostname is None:
                   raise SystemExit(
@@ -144,9 +144,8 @@ jobs:
                   "should provide it automatically for workflow steps."
               )
 
-          for value in (direct_url, pooler_url, resolved_url):
-              if value:
-                  print(f"::add-mask::{value}")
+          for value in (item for item in (direct_url, pooler_url, resolved_url) if item):
+              print(f"::add-mask::{value}")
           with open(github_env, "a", encoding="utf-8") as env_file:
               env_file.write(f"SUPABASE_DEPLOY_DB_URL={resolved_url}\n")
           PY
