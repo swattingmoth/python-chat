@@ -92,10 +92,25 @@ jobs:
                       f"Original resolution error: {exc}."
                   ) from exc
 
+              if not ipv4_info:
+                  raise SystemExit(
+                      "GitHub-hosted runners resolved no IPv4 addresses for "
+                      f"{parts.hostname}. Set SUPABASE_POOLER_DB_URL to Supabase's "
+                      "IPv4 pooler connection string."
+                  )
+
+              raw_userinfo = ""
+              if "@" in parts.netloc:
+                  raw_userinfo = f"{parts.netloc.rsplit('@', 1)[0]}@"
+
+              resolved_netloc = f"{raw_userinfo}{ipv4_info[0][4][0]}"
+              if parts.port is not None:
+                  resolved_netloc = f"{resolved_netloc}:{parts.port}"
+
               resolved_url = urlunsplit(
                   (
                       parts.scheme,
-                      parts.netloc.replace(parts.hostname, ipv4_info[0][4][0], 1),
+                      resolved_netloc,
                       parts.path,
                       parts.query,
                       parts.fragment,
@@ -111,7 +126,9 @@ jobs:
           if github_env is None:
               raise SystemExit("GITHUB_ENV is not available.")
 
-          print(f"::add-mask::{resolved_url}")
+          for value in (direct_url, pooler_url, resolved_url):
+              if value:
+                  print(f"::add-mask::{value}")
           with open(github_env, "a", encoding="utf-8") as env_file:
               env_file.write(f"SUPABASE_DEPLOY_DB_URL={resolved_url}\n")
           PY
