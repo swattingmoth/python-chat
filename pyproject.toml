@@ -46,6 +46,7 @@ warn_unused_ignores = true
 disallow_untyped_decorators = true
 mypy_path = ["src"]
 [[tool.mypy.overrides]]
-module = ["xai_sdk", "xai_sdk.*", "dotenv.*"]
+module = ["xai_sdk", "xai_sdk.*"]
 ignore_missing_imports = true
+
 
