@@ -45,8 +45,8 @@ jobs:
     needs: quality
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
     concurrency:
-       group: deploy-supabase-${{ github.ref }}
-       cancel-in-progress: false
+      group: deploy-supabase-${{ github.ref }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout
