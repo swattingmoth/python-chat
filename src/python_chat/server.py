@@ -8,7 +8,7 @@ from urllib import parse as urllib_parse
 
 import gradio as gr
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from python_chat.app import configure_logging, launch_app
 from python_chat.chatbot import initialize_runtime
@@ -314,6 +314,17 @@ def create_server_app() -> FastAPI:
     def readyz() -> dict[str, str]:
         ModelContext.current()
         return {"status": "ready"}
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        logger.error("Global exception caught in request lifecycle")
+        logger.exception(exc)
+        return JSONResponse(
+            status_code=500,
+            content={"message": "An internal server error occurred."},
+        )
 
     gr.mount_gradio_app(app, blocks, path="/app")
     return app

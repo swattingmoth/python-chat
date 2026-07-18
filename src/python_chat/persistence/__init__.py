@@ -114,12 +114,18 @@ class SupabaseClient:
         client: Any = None,
     ) -> None:
         self._url = _normalize_config_value(url or os.getenv("SUPABASE_URL"))
+        logger.info(f"Initializing SupabaseClient with URL: {self._url}")
         self._key = _normalize_config_value(
             key or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         )
+        if self._key and self._key.startswith("sb_secret_"):
+            logger.info("Retrieved service role key for Supabase client.")
         self._anon_key = _normalize_config_value(
             anon_key or os.getenv("SUPABASE_ANON_KEY")
         )
+        if self._anon_key and self._anon_key.startswith("sb_publishable"):
+            logger.info("Retrieved anon key for Supabase client.")
+
         self.user_id = _normalize_config_value(
             user_id or os.getenv("SUPABASE_AUTH_USER_ID")
         )
@@ -136,6 +142,7 @@ class SupabaseClient:
                     logger.warning(
                         "Unexpected Supabase client type: %s", type(self._client)
                     )
+                logger.info("Supabase client initialized successfully.")
             except Exception as exc:
                 logger.warning("Failed to initialize Supabase client: %s", exc)
                 self._client = None
@@ -144,6 +151,7 @@ class SupabaseClient:
             self._service_rpc_client = self._client
         elif self._url and self._key:
             self._service_rpc_client = HttpRpcClient(url=self._url, api_key=self._key)
+            logger.info("Initialized service RPC client using HttpRpcClient.")
 
     @property
     def enabled(self) -> bool:
