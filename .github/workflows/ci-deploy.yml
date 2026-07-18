@@ -118,6 +118,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
 
     steps:
       - name: Checkout Repository
@@ -129,5 +132,19 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-  
- 
+
+      - name: Build and push Docker images
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context:
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}:latest
+          # Sets the target stage to build
+          target: # optional
+          # Ulimit options (e.g., nofile=1024:1024)
+          ulimit: # optional
+          # GitHub Token used to authenticate against a repository for Git context
+          github-token: # optional, default is ${{ github.token }}
+        
+       
