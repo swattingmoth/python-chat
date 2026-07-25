@@ -53,12 +53,17 @@ def initialize_runtime() -> ModelContext:
     xai_api_key = _resolve_xai_api_key(persistence_client)
     client = init_api(xai_api_key, "https://api.x.ai/v1")
 
-    return ModelContext.create(
+    context = ModelContext.create(
         client,
         image_folder,
         persistence_client=resolved_persistence_client,
         log_queue=log_queue,
     )
+
+    if log_queue and resolved_persistence_client and context:
+        logger.info("Runtime initialized successfully.")
+
+    return context
 
 
 if __name__ == "__main__":
