@@ -55,7 +55,7 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
         mock_uuid.return_value = "test-uuid-1234"
 
         os.environ["CHATBOT_ENV"] = "development"
-        path, data, cost = generate_image(
+        path, cost = generate_image(
             prompt="a cat in hat",
             model=Models.IMAGES,
             client=fake_client,
@@ -74,7 +74,6 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
         )
 
         assert path == "/tmp/test-images/fake.png"
-        assert data == b"\x89PNG..."
         assert cost == 0.05
 
 
@@ -87,13 +86,13 @@ def test_generate_image_tool_uses_context_switches_model_and_returns_toolresult(
 
     with patch(
         "python_chat.images.generate_image",
-        return_value=("/tmp/test-images/generated.png", b"imgdata", 0.0),
+        return_value=("/tmp/test-images/generated.png", 0.0),
     ) as mock_generate_image:
         result = generate_image_tool("draw a tree", "tool-call-1")
 
     assert isinstance(result, ToolResult)
     assert result.content_for_model == "Generated image generated.png"
-    assert result.content == b"imgdata"
+    assert result.content == "/tmp/test-images/generated.png"
     assert result.content_type == "image"
     assert result.tool_call_id == "tool-call-1"
     assert result.metadata == {"image_reference": "/tmp/test-images/generated.png"}
@@ -111,7 +110,7 @@ def test_generate_image_tool_returns_tool_cost() -> None:
 
     with patch(
         "python_chat.images.generate_image",
-        return_value=("/tmp/test-images/generated.png", b"imgdata", 0.05),
+        return_value=("/tmp/test-images/generated.png", 0.05),
     ):
         result = generate_image_tool("draw a tree", "tool-call-1")
 
@@ -144,7 +143,7 @@ def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
         "python_chat.images.ensure_local_image_copy", lambda *_: "c:/tmp/local.png"
     )
 
-    image_file, image_data, cost = generate_image(
+    image_file, cost = generate_image(
         prompt="tree",
         model=Models.IMAGES,
         client=fake_client,
@@ -152,7 +151,6 @@ def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
         upload_to_storage=True,
     )
 
-    assert image_data == b"png"
     assert image_file == "https://example.test/image.png"
     assert cost == 0.0
     upload_bytes.assert_called_once()
@@ -168,7 +166,7 @@ def test_generate_image_sets_tool_cost(monkeypatch: Any) -> None:
         lambda *_: "c:/tmp/local.png",
     )
 
-    _, _, estimated_cost = generate_image(
+    _, estimated_cost = generate_image(
         prompt="tree",
         model=Models.IMAGES,
         client=fake_client,
