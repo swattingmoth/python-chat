@@ -33,6 +33,30 @@ if ($supabaseUrlLine) {
     $supabaseUrl = ($supabaseUrlLine -replace '^SUPABASE_URL=', '').Trim()
 }
 
+$supabaseStorageContainerNameLine = Get-Content $envFilePath | Where-Object { $_ -match '^SUPABASE_STORAGE_CONTAINER_NAME=' } | Select-Object -First 1
+$supabaseStorageContainerName = "supabase-storage"
+if ($supabaseStorageContainerNameLine) {
+    $parsedContainerName = ($supabaseStorageContainerNameLine -replace '^SUPABASE_STORAGE_CONTAINER_NAME=', '').Trim()
+    if ($parsedContainerName) {
+        $supabaseStorageContainerName = $parsedContainerName
+    }
+}
+
+$imageBucketContainerPathLine = Get-Content $envFilePath | Where-Object { $_ -match '^SUPABASE_IMAGE_BUCKET_CONTAINER_PATH=' } | Select-Object -First 1
+$supabaseImageBucketContainerPath = "/var/lib/storage/images"
+if ($imageBucketContainerPathLine) {
+    $parsedContainerPath = ($imageBucketContainerPathLine -replace '^SUPABASE_IMAGE_BUCKET_CONTAINER_PATH=', '').Trim()
+    if ($parsedContainerPath) {
+        $supabaseImageBucketContainerPath = $parsedContainerPath
+    }
+}
+
+$supabaseStorageContainerId = ""
+$supabaseStorageContainerOutput = & docker ps -aq --filter "name=^${supabaseStorageContainerName}$"
+if ($null -ne $supabaseStorageContainerOutput) {
+    $supabaseStorageContainerId = ($supabaseStorageContainerOutput | Select-Object -First 1).ToString().Trim()
+}
+
 $containerSupabaseUrl = $supabaseUrl
 if ($supabaseUrl) {
     $containerSupabaseUrl = $supabaseUrl -replace '://127\.0\.0\.1', '://host.docker.internal'
@@ -45,6 +69,14 @@ if ($supabaseUrl -and ($supabaseUrl -match 'localhost|127\.0\.0\.1')) {
     if ($containerSupabaseUrl) {
         Write-Host "Applying container override: SUPABASE_URL=$containerSupabaseUrl" -ForegroundColor Yellow
     }
+}
+
+if ($supabaseStorageContainerId) {
+    Write-Host "Sharing volumes from Supabase container '$supabaseStorageContainerName' (read-only)." -ForegroundColor Yellow
+    Write-Host "Using image bucket container path: $supabaseImageBucketContainerPath" -ForegroundColor Yellow
+} else {
+    Write-Host "Supabase storage container '$supabaseStorageContainerName' not found. Image URL mapping to local file paths is disabled." -ForegroundColor Yellow
+    Write-Host "Set SUPABASE_STORAGE_CONTAINER_NAME in $EnvFile if your container name differs." -ForegroundColor Yellow
 }
 
 Push-Location $projectRoot
@@ -90,6 +122,10 @@ try {
     )
     if ($containerSupabaseUrl) {
         $runArgs += @("-e", "SUPABASE_URL=$containerSupabaseUrl")
+    }
+    if ($supabaseStorageContainerId) {
+        $runArgs += @("--volumes-from", "${supabaseStorageContainerId}:ro")
+        $runArgs += @("-e", "SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH=$supabaseImageBucketContainerPath")
     }
     $runArgs += @("-p", "${HostPort}:7860", $ImageName)
 

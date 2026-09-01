@@ -8,7 +8,7 @@ class Models:
 
     IMAGES = "grok-imagine-image"
     QUESTIONS = "grok-4-1-fast-reasoning"
-    COMPLEX_QUESTIONS = "grok-4.3"
+    COMPLEX_QUESTIONS = "grok-4.5"
 
 
 def init_api(api_key: str, api_url: str | None = None) -> Client:

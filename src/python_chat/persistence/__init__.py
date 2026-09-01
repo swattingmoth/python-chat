@@ -6,10 +6,11 @@ import os
 import queue
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Literal
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from uuid import uuid4
 
@@ -27,6 +28,58 @@ def _normalize_config_value(value: str | None) -> str | None:
 
     normalized = value.strip()
     return normalized if normalized else None
+
+
+def _normalize_public_storage_url(url: str) -> str:
+    """Normalize a Supabase public storage URL for browser clients.
+
+    `SUPABASE_URL` can differ between server-side connectivity and browser
+    accessibility (for example, `host.docker.internal` inside Docker).
+    This helper can either map public storage URLs to a mounted local file
+    path (for Gradio-safe local rendering) or apply a browser-facing origin
+    override while preserving the original storage path/query.
+    """
+
+    def _resolve_object_file_path(candidate_path: Path, fallback_path: str) -> str:
+        """Resolve a filesystem path to a readable file for Gradio.
+
+        Some local Supabase storage layouts represent an object key as a
+        directory containing internal files. If the mapped path is a directory,
+        return the first file found inside it.
+        """
+        if not candidate_path.exists():
+            return fallback_path
+
+        if candidate_path.is_file():
+            return str(candidate_path)
+
+        if not candidate_path.is_dir():
+            return str(candidate_path)
+
+        nested_files = sorted(p for p in candidate_path.rglob("*") if p.is_file())
+        if nested_files:
+            return str(nested_files[0])
+
+        return str(candidate_path)
+
+    parsed_url = urllib_parse.urlparse(url)
+
+    image_bucket_mount_path = _normalize_config_value(
+        os.getenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH")
+    )
+    public_image_path_prefix = "/storage/v1/object/public/images/"
+    if image_bucket_mount_path and parsed_url.path.startswith(public_image_path_prefix):
+        object_key = urllib_parse.unquote(
+            parsed_url.path.removeprefix(public_image_path_prefix)
+        ).lstrip("/")
+        if image_bucket_mount_path.startswith("/"):
+            mapped_path = str(PurePosixPath(image_bucket_mount_path) / object_key)
+            return _resolve_object_file_path(Path(mapped_path), mapped_path)
+
+        mapped_path = str(Path(image_bucket_mount_path) / object_key)
+        return _resolve_object_file_path(Path(mapped_path), mapped_path)
+
+    return url
 
 
 class HttpRpcClient:
@@ -203,10 +256,12 @@ class SupabaseClient:
         try:
             response = self._client.storage.from_(bucket).get_public_url(path)
             if isinstance(response, str):
-                return response
+                return _normalize_public_storage_url(response)
             if isinstance(response, dict):
                 maybe_url = response.get("publicUrl")
-                return maybe_url if isinstance(maybe_url, str) else None
+                if isinstance(maybe_url, str):
+                    return _normalize_public_storage_url(maybe_url)
+                return None
             return None
         except Exception as exc:
             logger.warning("Failed to get public URL for %s/%s: %s", bucket, path, exc)
