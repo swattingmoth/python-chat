@@ -30,6 +30,18 @@ def _normalize_config_value(value: str | None) -> str | None:
     return normalized if normalized else None
 
 
+def _sanitize_object_key(object_key: str) -> str | None:
+    """Strip redundant segments and reject any '..' traversal segment."""
+    segments = [
+        segment
+        for segment in object_key.replace("\\", "/").split("/")
+        if segment not in ("", ".")
+    ]
+    if any(segment == ".." for segment in segments):
+        return None
+    return "/".join(segments)
+
+
 def _normalize_public_storage_url(url: str) -> str:
     """Normalize a Supabase public storage URL for browser clients.
 
@@ -72,6 +84,14 @@ def _normalize_public_storage_url(url: str) -> str:
         object_key = urllib_parse.unquote(
             parsed_url.path.removeprefix(public_image_path_prefix)
         ).lstrip("/")
+        safe_object_key = _sanitize_object_key(object_key)
+        if safe_object_key is None:
+            logger.warning(
+                "Rejected image object key with path traversal segments: %r",
+                object_key,
+            )
+            return url
+        object_key = safe_object_key
         if image_bucket_mount_path.startswith("/"):
             mapped_path = str(PurePosixPath(image_bucket_mount_path) / object_key)
             return _resolve_object_file_path(Path(mapped_path), mapped_path)

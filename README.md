@@ -140,8 +140,8 @@ For local Docker runs with a local Supabase stack, set
 `SUPABASE_STORAGE_CONTAINER_NAME` to the running Supabase storage container name
 and `SUPABASE_IMAGE_BUCKET_CONTAINER_PATH` to the in-container path for the
 `images` bucket. The deploy script shares that container's volumes with the app
-container (read-only) and the runtime returns local file paths to Gradio, so
-`safehttpx` host validation is bypassed.
+container (read-only) and the runtime returns local file paths to Gradio. Returning http paths 
+when running locally results in `safehttpx` errors.
 
 2. Launch:
 

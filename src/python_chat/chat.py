@@ -600,7 +600,12 @@ class ChatInterface:
 
                         if is_image_mode:
                             # Side-effect: capture image ToolResult for "Generate Image" mode
-                            if tr and tr.content_type == "image" and tr.content:
+                            if (
+                                tr
+                                and tr.content_type == "image"
+                                and tr.content
+                                and isinstance(tr.content, str)
+                            ):
                                 current_image_path = tr.content
                             # Yield so the UI can display the image promptly
                             yield local_history + [

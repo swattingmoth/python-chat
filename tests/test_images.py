@@ -117,6 +117,24 @@ def test_generate_image_tool_returns_tool_cost() -> None:
     assert result.cost == 0.05
 
 
+def test_generate_image_tool_handles_missing_image_path() -> None:
+    """When generate_image returns no path, the tool reports failure instead of a ToolResult with an image."""
+    with patch(
+        "python_chat.images.generate_image",
+        return_value=(None, 0.02),
+    ) as mock_generate_image:
+        result = generate_image_tool("draw a tree", "tool-call-3")
+
+    mock_generate_image.assert_called_once()
+    assert isinstance(result, ToolResult)
+    assert result.content_for_model == "Failed to generate image"
+    assert result.content is None
+    assert result.content_type == "text"
+    assert result.tool_call_id == "tool-call-3"
+    assert result.cost == 0.02
+    assert result.metadata == {}
+
+
 def test_generate_image_tool_propagates_context_errors() -> None:
     """If no context initialized, current() raises (tool does not swallow)."""
     ModelContext.reset()  # force uninitialized

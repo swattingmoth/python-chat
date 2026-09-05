@@ -106,15 +106,21 @@ def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
     # ) as f:
     #     image_data = f.read()
 
-    content_for_model = "Generated image"
     if image_file:
-        content_for_model += f" {os.path.basename(image_file)}"
-
-    return ToolResult(
-        content_for_model=content_for_model,
-        content=image_file,
-        content_type="image",
-        tool_call_id=tool_call_id,
-        cost=image_cost,
-        metadata={"image_reference": image_file},
-    )
+        return ToolResult(
+            content_for_model=f"Generated image {os.path.basename(image_file)}",
+            content=image_file,
+            content_type="image",
+            tool_call_id=tool_call_id,
+            cost=image_cost,
+            metadata={"image_reference": image_file},
+        )
+    else:
+        return ToolResult(
+            content_for_model="Failed to generate image",
+            content=None,
+            content_type="text",
+            tool_call_id=tool_call_id,
+            cost=image_cost,
+            metadata={},
+        )
