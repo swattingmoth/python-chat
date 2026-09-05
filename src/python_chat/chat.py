@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
@@ -13,7 +12,6 @@ os.environ.setdefault("OTEL_TRACES_EXPORTER", "none")
 os.environ.setdefault("OTEL_METRICS_EXPORTER", "none")
 
 from google.protobuf import json_format
-from PIL import Image
 from xai_sdk.chat import Chunk, Response, assistant, system, tool_result, user
 from xai_sdk.proto import chat_pb2
 from xai_sdk.tools import code_execution, get_tool_call_type, web_search
@@ -175,7 +173,7 @@ class ChatInterface:
                 and returning responses/results.
         """
         self.chat_history: list[chat_pb2.Message] = []
-        self.image: Optional[Image.Image] = None
+        self.image_path: Optional[str] = None
         self.modelContext = modelContext
         self._completer: ChatCompleter = completer or self._default_completer
         self._tool_handler: ToolHandler = (
@@ -361,9 +359,9 @@ class ChatInterface:
         choice: str,
         *,
         runtime: SessionRuntime | None = None,
-        image: Optional[Image.Image] = None,
+        image_path: Optional[str] = None,
     ) -> Generator[
-        tuple[list[dict[str, Any]], Optional[Image.Image], SessionRuntime], None, None
+        tuple[list[dict[str, Any]], Optional[str], SessionRuntime], None, None
     ]:
         """Stream chat responses token by token and handle tool calls.
 
@@ -377,9 +375,9 @@ class ChatInterface:
         """
         session_runtime = self._ensure_runtime(choice, runtime)
         using_instance_state = runtime is None
-        current_image = image if image is not None else self.image
+        current_image_path = image_path if image_path is not None else self.image_path
         if not message:
-            yield chat_history, current_image, session_runtime
+            yield chat_history, current_image_path, session_runtime
             return
 
         if using_instance_state:
@@ -452,7 +450,7 @@ class ChatInterface:
                     "content": "",
                     "metadata": {"title": "Thinking...", "status": "pending"},
                 }
-            ], current_image, session_runtime
+            ], current_image_path, session_runtime
 
             while True:
                 # Build messages with system context
@@ -479,7 +477,7 @@ class ChatInterface:
                     if token:
                         yield local_history + [
                             message_to_dict(assistant(response.content))
-                        ], current_image, session_runtime
+                        ], current_image_path, session_runtime
 
                     for tool_call in chunk.tool_calls:
                         if get_tool_call_type(tool_call) == "client_side_tool":
@@ -493,7 +491,7 @@ class ChatInterface:
                                     "status": "pending",
                                 },
                             }
-                        ], current_image, session_runtime
+                        ], current_image_path, session_runtime
 
                 # Append this turn's assistant text (if any) to history
                 assistant_message_id: int | None = None
@@ -602,11 +600,13 @@ class ChatInterface:
 
                         if is_image_mode:
                             # Side-effect: capture image ToolResult for "Generate Image" mode
-                            if tr and tr.content_type == "image" and tr.content:
-                                try:
-                                    current_image = Image.open(io.BytesIO(tr.content))
-                                except Exception:
-                                    pass
+                            if (
+                                tr
+                                and tr.content_type == "image"
+                                and tr.content
+                                and isinstance(tr.content, str)
+                            ):
+                                current_image_path = tr.content
                             # Yield so the UI can display the image promptly
                             yield local_history + [
                                 message_to_dict(
@@ -614,7 +614,7 @@ class ChatInterface:
                                         last_response.content if last_response else ""
                                     )
                                 )
-                            ], current_image, session_runtime
+                            ], current_image_path, session_runtime
 
                         self.append_to_history(
                             message_history,
@@ -623,7 +623,7 @@ class ChatInterface:
                             ),
                         )
 
-                    if is_image_mode and current_image:
+                    if is_image_mode and current_image_path:
                         break
                 else:
                     break
@@ -637,14 +637,14 @@ class ChatInterface:
             error_message = assistant(error_msg)
             self.append_to_history(message_history, error_message)
             local_history.append(message_to_dict(error_message))
-            yield local_history, current_image, session_runtime
+            yield local_history, current_image_path, session_runtime
 
         if using_instance_state:
-            self.image = current_image
+            self.image_path = current_image_path
 
     def clear_history(self) -> list[dict[str, Any]]:
         """Clear stored chat history and reset the image output."""
         self.chat_history = []
-        self.image = None
+        self.image_path = None
         logger.info("Cleared chat history and reset image.")
         return []

@@ -15,7 +15,7 @@ def test_models_constants_have_expected_values() -> None:
     """The Models class exposes the three model identifiers used by the app."""
     assert Models.IMAGES == "grok-imagine-image"
     assert Models.QUESTIONS == "grok-4-1-fast-reasoning"
-    assert Models.COMPLEX_QUESTIONS == "grok-4.3"
+    assert Models.COMPLEX_QUESTIONS == "grok-4.5"
 
 
 @patch("python_chat.api.Client")

@@ -86,6 +86,9 @@ class _FakeGr:
     def update(self, **kwargs: Any) -> dict[str, Any]:
         return kwargs
 
+    def skip(self, **kwargs: Any) -> dict[Any, Any]:
+        return {}
+
 
 class _FakeChatInterface:
     def __init__(self, model_context: Any) -> None:
@@ -169,10 +172,10 @@ def test_launch_app_registers_handlers_and_executes_callbacks(monkeypatch: Any) 
     assert isinstance(demo, _FakeBlocks)
 
     on_choice_change = fake_gr.registry["change"][0]["fn"]
-    show, show_state = on_choice_change("Generate Image", {})
-    hide, hide_state = on_choice_change("Question", {})
-    assert show == {"visible": True}
-    assert hide == {"visible": False}
+    _, _, show, show_state = on_choice_change("Generate Image", {})
+    _, _, hide, hide_state = on_choice_change("Question", {})
+    assert show == {"value": None, "visible": True}
+    assert hide == {"value": None, "visible": False}
     assert show_state["selected_choice"] == "Generate Image"
     assert hide_state["selected_choice"] == "Question"
 
@@ -194,7 +197,7 @@ def test_launch_app_registers_handlers_and_executes_callbacks(monkeypatch: Any) 
     )
     assert empty_turns[0][0] == [{"role": "user", "content": "old"}]
     assert empty_turns[0][1] == ""
-    assert empty_turns[0][2] is None
+    assert isinstance(empty_turns[0][2], dict)
     assert empty_turns[0][3]["selected_choice"] == "Question"
 
     msg_turns = list(submit_fn("hello", [], "Question", {}))
@@ -285,7 +288,7 @@ def test_launch_app_uses_identity_resolver_for_runtime(monkeypatch: Any) -> None
     app_module.launch_app(identity_resolver=lambda _request: ("user-abc", "tok-xyz"))
 
     on_choice_change = fake_gr.registry["change"][0]["fn"]
-    _, state = on_choice_change("Question", {})
+    _, _, _, state = on_choice_change("Question", {})
     assert state["user_id"] == "user-abc"
     assert state["access_token"] == "tok-xyz"
 
@@ -309,6 +312,6 @@ def test_launch_app_ignores_blank_state_identity_values(monkeypatch: Any) -> Non
     app_module.launch_app(identity_resolver=lambda _request: ("user-abc", "tok-xyz"))
 
     on_choice_change = fake_gr.registry["change"][0]["fn"]
-    _, state = on_choice_change("Question", {"user_id": "", "access_token": "  "})
+    _, _, _, state = on_choice_change("Question", {"user_id": "", "access_token": "  "})
     assert state["user_id"] == "user-abc"
     assert state["access_token"] == "tok-xyz"

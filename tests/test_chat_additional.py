@@ -220,7 +220,7 @@ def test_chat_invalid_tool_call_json_uses_raw_args(mock_context: MagicMock) -> N
     assert spy_persist.call_args.kwargs["input_args"] == {"raw": "{bad-json"}
 
 
-def test_chat_image_mode_invalid_image_bytes_do_not_crash(
+def test_chat_image_mode_no_image_path_does_not_crash(
     mock_context: MagicMock,
 ) -> None:
     tc = chat_pb2.ToolCall()
@@ -262,7 +262,7 @@ def test_chat_image_mode_invalid_image_bytes_do_not_crash(
         return_value=[
             ToolResult(
                 content_for_model="img",
-                content=b"not-a-real-image",
+                content=None,
                 content_type="image",
                 tool_call_id="call_img",
             )
@@ -273,7 +273,7 @@ def test_chat_image_mode_invalid_image_bytes_do_not_crash(
 
     turns = list(iface.chat("draw", [], "Generate Image"))
     assert turns
-    assert iface.image is None
+    assert iface.image_path is None
 
 
 def test_message_to_dict_includes_tool_calls() -> None:
