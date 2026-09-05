@@ -256,7 +256,7 @@ def launch_app(
             return (
                 updated_history,
                 "",
-                gr.update(visible=(selected_choice == "Generate Image")),
+                gr.update(value=None, visible=(selected_choice == "Generate Image"))
                 runtime,
             )
 
