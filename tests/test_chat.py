@@ -350,7 +350,7 @@ def test_chat_handles_tool_call_and_continues_for_non_image_tool(
 def test_chat_tool_call_to_generate_image_sets_image_and_stops(
     mock_context: MagicMock,
 ) -> None:
-    """Image generation tool path: special result type sets self.image, yields it, and breaks without extra completion."""
+    """Image generation tool path: special result type sets self.image_path, yields it, and breaks without extra completion."""
     # Model "says" something then calls the (fake) image tool
     img_stream = make_tool_call_stream(
         tool_name="generate_image",
