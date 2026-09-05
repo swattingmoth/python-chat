@@ -48,8 +48,7 @@ def _normalize_public_storage_url(url: str) -> str:
     `SUPABASE_URL` can differ between server-side connectivity and browser
     accessibility (for example, `host.docker.internal` inside Docker).
     This helper can either map public storage URLs to a mounted local file
-    path (for Gradio-safe local rendering) or apply a browser-facing origin
-    override while preserving the original storage path/query.
+    path (for Gradio-safe local rendering).
     """
 
     def _resolve_object_file_path(candidate_path: Path, fallback_path: str) -> str:
@@ -68,9 +67,9 @@ def _normalize_public_storage_url(url: str) -> str:
         if not candidate_path.is_dir():
             return str(candidate_path)
 
-        nested_files = sorted(p for p in candidate_path.rglob("*") if p.is_file())
-        if nested_files:
-            return str(nested_files[0])
+        for p in candidate_path.rglob("*"):
+            if p.is_file():
+                return str(p)
 
         return str(candidate_path)
 

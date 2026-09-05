@@ -248,7 +248,7 @@ def launch_app(
             request: gr.Request | None = None,
         ) -> tuple[list[dict[str, Any]], str, str | dict[Any, Any], SessionRuntime]:
             """Update image visibility based on choice (no longer mutates global tool registry)."""
-            updated_history, _, _, _ = handle_clear(state, request=request)
+            updated_history, _, _, state = handle_clear(state, request=request)
             runtime = ensure_runtime(state, selected_choice, request=request)
 
             return (
