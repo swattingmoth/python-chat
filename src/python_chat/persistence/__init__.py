@@ -92,11 +92,27 @@ def _normalize_public_storage_url(url: str) -> str:
             return url
         object_key = safe_object_key
         if image_bucket_mount_path.startswith("/"):
-            mapped_path = str(PurePosixPath(image_bucket_mount_path) / object_key)
-            return _resolve_object_file_path(Path(mapped_path), mapped_path)
+            mount_root = Path(str(PurePosixPath(image_bucket_mount_path)))
+            mapped_path = Path(
+                str(PurePosixPath(image_bucket_mount_path) / object_key)
+            )
+        else:
+            mount_root = Path(image_bucket_mount_path)
+            mapped_path = mount_root / object_key
 
-        mapped_path = str(Path(image_bucket_mount_path) / object_key)
-        return _resolve_object_file_path(Path(mapped_path), mapped_path)
+        try:
+            mount_root_resolved = mount_root.resolve()
+            mapped_resolved = mapped_path.resolve()
+        except OSError:
+            return _resolve_object_file_path(mapped_path, str(mapped_path))
+
+        if not mapped_resolved.is_relative_to(mount_root_resolved):
+            logger.warning(
+                "Rejected mapped image path outside mount root: %s", mapped_resolved
+            )
+            return url
+
+        return _resolve_object_file_path(mapped_resolved, str(mapped_resolved))
 
     return url
 
