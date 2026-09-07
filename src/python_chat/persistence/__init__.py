@@ -6,10 +6,11 @@ import os
 import queue
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Literal
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from uuid import uuid4
 
@@ -205,12 +206,18 @@ class SupabaseClient:
         client: Any = None,
     ) -> None:
         self._url = _normalize_config_value(url or os.getenv("SUPABASE_URL"))
+        logger.info(f"Initializing SupabaseClient with URL: {self._url}")
         self._key = _normalize_config_value(
             key or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         )
+        if self._key and self._key.startswith("sb_secret_"):
+            logger.info("Retrieved service role key for Supabase client.")
         self._anon_key = _normalize_config_value(
             anon_key or os.getenv("SUPABASE_ANON_KEY")
         )
+        if self._anon_key and self._anon_key.startswith("sb_publishable"):
+            logger.info("Retrieved anon key for Supabase client.")
+
         self.user_id = _normalize_config_value(
             user_id or os.getenv("SUPABASE_AUTH_USER_ID")
         )
@@ -227,6 +234,7 @@ class SupabaseClient:
                     logger.warning(
                         "Unexpected Supabase client type: %s", type(self._client)
                     )
+                logger.info("Supabase client initialized successfully.")
             except Exception as exc:
                 logger.warning("Failed to initialize Supabase client: %s", exc)
                 self._client = None
@@ -235,6 +243,7 @@ class SupabaseClient:
             self._service_rpc_client = self._client
         elif self._url and self._key:
             self._service_rpc_client = HttpRpcClient(url=self._url, api_key=self._key)
+            logger.info("Initialized service RPC client using HttpRpcClient.")
 
     @property
     def enabled(self) -> bool:
@@ -294,10 +303,12 @@ class SupabaseClient:
         try:
             response = self._client.storage.from_(bucket).get_public_url(path)
             if isinstance(response, str):
-                return response
+                return _normalize_public_storage_url(response)
             if isinstance(response, dict):
                 maybe_url = response.get("publicUrl")
-                return maybe_url if isinstance(maybe_url, str) else None
+                if isinstance(maybe_url, str):
+                    return _normalize_public_storage_url(maybe_url)
+                return None
             return None
         except Exception as exc:
             logger.warning("Failed to get public URL for %s/%s: %s", bucket, path, exc)

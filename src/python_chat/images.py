@@ -21,7 +21,7 @@ def generate_image(
     image_path: str,
     *,
     upload_to_storage: bool = True,
-) -> tuple[str | None, bytes, float]:
+) -> tuple[str | None, float]:
     """Generate an image using the xAI image API and save it locally.
 
     A safety system prompt is prepended to the user prompt to guide generation.
@@ -36,7 +36,7 @@ def generate_image(
         image_path: Directory where the generated image file will be written.
 
     Returns:
-        A tuple of (saved_file_path, raw_image_bytes, image_cost).
+        A tuple of (saved_file_path, image_cost).
     """
     image_system_prompt = (
         "Generate an image based on the request below. The generated image must not "
@@ -95,7 +95,7 @@ def generate_image(
 def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
     """Tool function to generate an image."""
     model_context = ModelContext.current()
-    image_file, image_data, image_cost = generate_image(
+    image_file, image_cost = generate_image(
         prompt,
         Models.IMAGES,
         model_context.client,
@@ -108,15 +108,21 @@ def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":
     # ) as f:
     #     image_data = f.read()
 
-    content_for_model = "Generated image"
     if image_file:
-        content_for_model += f" {os.path.basename(image_file)}"
-
-    return ToolResult(
-        content_for_model=content_for_model,
-        content=image_data,
-        content_type="image",
-        tool_call_id=tool_call_id,
-        cost=image_cost,
-        metadata={"image_reference": image_file},
-    )
+        return ToolResult(
+            content_for_model=f"Generated image {os.path.basename(image_file)}",
+            content=image_file,
+            content_type="image",
+            tool_call_id=tool_call_id,
+            cost=image_cost,
+            metadata={"image_reference": image_file},
+        )
+    else:
+        return ToolResult(
+            content_for_model="Failed to generate image",
+            content=None,
+            content_type="text",
+            tool_call_id=tool_call_id,
+            cost=image_cost,
+            metadata={},
+        )

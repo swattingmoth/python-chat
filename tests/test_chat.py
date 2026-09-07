@@ -7,13 +7,11 @@ for high coverage without real API calls or side effects.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, Generator
 from unittest.mock import MagicMock
 
 import pytest
-from PIL import Image as PILImage
 from xai_sdk.chat import user
 from xai_sdk.proto import chat_pb2
 
@@ -174,14 +172,6 @@ def mock_context() -> MagicMock:
     return ctx
 
 
-@pytest.fixture
-def sample_png_bytes() -> bytes:
-    """Small valid PNG for image tool result tests."""
-    buf = BytesIO()
-    PILImage.new("RGB", (4, 4), color="red").save(buf, format="PNG")
-    return buf.getvalue()
-
-
 # --- Tests for pure functions ---
 
 
@@ -238,7 +228,7 @@ def test_chat_interface_init_sets_history_and_accepts_injections(
     )
 
     assert iface.chat_history == []
-    assert iface.image is None
+    assert iface.image_path is None
     assert iface.modelContext is mock_context
     assert iface._completer is custom_completer
     assert iface._tool_handler is custom_handler
@@ -358,18 +348,19 @@ def test_chat_handles_tool_call_and_continues_for_non_image_tool(
 
 
 def test_chat_tool_call_to_generate_image_sets_image_and_stops(
-    mock_context: MagicMock, sample_png_bytes: bytes
+    mock_context: MagicMock,
 ) -> None:
-    """Image generation tool path: special result type sets self.image, yields it, and breaks without extra completion."""
+    """Image generation tool path: special result type sets self.image_path, yields it, and breaks without extra completion."""
     # Model "says" something then calls the (fake) image tool
     img_stream = make_tool_call_stream(
         tool_name="generate_image",
         preceding_text="Calling the image generation tool.",
     )
 
+    sample_image_path = "sampleimage.png"
     tool_result = ToolResult(
         content_for_model="Image generated successfully",
-        content=sample_png_bytes,
+        content=sample_image_path,
         tool_call_id="call_img",
         content_type="image",
     )
@@ -385,13 +376,11 @@ def test_chat_tool_call_to_generate_image_sets_image_and_stops(
 
     handler.assert_called_once()  # type: ignore[attr-defined]
     # Image must be populated
-    assert iface.image is not None
-    assert isinstance(iface.image, PILImage.Image)
-    assert iface.image.size == (4, 4)
+    assert iface.image_path == sample_image_path
 
     # Final yield must carry the image
     final_hist, final_img, _ = yields[-1]
-    assert final_img is iface.image
+    assert final_img is iface.image_path
     # The preceding text from model should be present (check internal history after consumption
     # as it is mutated by appends that happen after the tool_result yield snapshot).
     assert any(
@@ -428,20 +417,18 @@ def test_chat_catches_exception_and_yields_generic_error(
     assert "error" in last_hist[-1]["content"].lower()
 
 
-def test_clear_history_resets_chat_and_image_state(
-    mock_context: MagicMock, sample_png_bytes: bytes
-) -> None:
+def test_clear_history_resets_chat_and_image_state(mock_context: MagicMock) -> None:
     """clear_history empties history and removes any generated image."""
     # Seed some state via a fake image-producing interaction (simplified)
     iface = ChatInterface(mock_context)
     iface.chat_history = [user("x")]
-    iface.image = PILImage.open(BytesIO(sample_png_bytes))
+    iface.image_path = "sampleimage.png"
 
     result = iface.clear_history()
 
     assert result == []
     assert iface.chat_history == []
-    assert iface.image is None
+    assert iface.image_path is None
 
 
 def test_chat_handles_multiple_parallel_tool_calls(
@@ -504,4 +491,4 @@ def test_chat_tool_result_without_image_mode_does_not_set_image(
     _ = list(iface.chat("Tool but not image mode", [], "Question"))
 
     # Guard prevented image assignment
-    assert iface.image is None
+    assert iface.image_path is None

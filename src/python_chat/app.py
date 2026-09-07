@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Callable, Generator, Optional, cast
 
 import gradio as gr
-from PIL import Image
 
 from python_chat.chat import ChatInterface, SessionRuntime, get_model_for_choice
 from python_chat.context import ModelContext
@@ -231,7 +230,7 @@ def launch_app(
         chatbot = gr.Chatbot(label="Chat", height=400)
         session_state = gr.State(value=build_default_runtime())
 
-        image_output = gr.Image(label="Generated Image", visible=False, type="pil")
+        image_output = gr.Image(label="Generated Image", visible=False, type="filepath")
 
         with gr.Row():
             message_input = gr.Textbox(
@@ -247,15 +246,22 @@ def launch_app(
             selected_choice: str,
             state: SessionRuntime,
             request: gr.Request | None = None,
-        ) -> tuple[dict[str, Any], SessionRuntime]:
+        ) -> tuple[list[dict[str, Any]], str, str | dict[Any, Any], SessionRuntime]:
             """Update image visibility based on choice (no longer mutates global tool registry)."""
+            updated_history, _, _, state = handle_clear(state, request=request)
             runtime = ensure_runtime(state, selected_choice, request=request)
-            return gr.update(visible=(selected_choice == "Generate Image")), runtime
+
+            return (
+                updated_history,
+                "",
+                gr.update(value=None, visible=(selected_choice == "Generate Image")),
+                runtime,
+            )
 
         choice.change(
             fn=on_choice_change,
             inputs=[choice, session_state],
-            outputs=[image_output, session_state],
+            outputs=[chatbot, message_input, image_output, session_state],
         )
 
         def handle_submit(
@@ -265,14 +271,19 @@ def launch_app(
             state: SessionRuntime,
             request: gr.Request | None = None,
         ) -> Generator[
-            tuple[list[dict[str, Any]], str, Optional[Image.Image], SessionRuntime],
+            tuple[
+                list[dict[str, Any]],
+                str,
+                Optional[str] | dict[Any, Any],
+                SessionRuntime,
+            ],
             None,
             None,
         ]:
             """Handle message submission."""
             runtime = ensure_runtime(state, selected_choice, request=request)
             if not message:
-                yield chat_history, "", None, runtime
+                yield chat_history, "", gr.skip(), runtime
                 return
 
             for updated_history, image_path, updated_runtime in chat_interface.chat(
@@ -286,7 +297,7 @@ def launch_app(
         def handle_clear(
             state: SessionRuntime,
             request: gr.Request | None = None,
-        ) -> tuple[list[dict[str, Any]], str, Optional[Image.Image], SessionRuntime]:
+        ) -> tuple[list[dict[str, Any]], str, Optional[str], SessionRuntime]:
             """Handle clear button."""
             runtime = ensure_runtime(
                 state,
