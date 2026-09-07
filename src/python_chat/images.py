@@ -87,7 +87,9 @@ def generate_image(
             "Image file path is None. Image was not saved locally or uploaded to storage."
         )
 
-    return (image_file, image_data, image_cost)
+    logger.info(f"Generated image file: {image_file}, cost: {image_cost}")
+
+    return (image_file, image_cost)
 
 
 def generate_image_tool(prompt: str, tool_call_id: str) -> "ToolResult":

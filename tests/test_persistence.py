@@ -220,6 +220,100 @@ def test_supabase_client_upload_and_public_url_variants() -> None:
     assert client.get_public_url(bucket="images", path="x/y.png") is None
 
 
+def test_supabase_client_public_url_maps_to_local_mount_path(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    from python_chat.persistence import SupabaseClient
+
+    mapped_file = tmp_path / "folder" / "x y.png"
+    mapped_file.parent.mkdir(parents=True)
+    mapped_file.write_bytes(b"png-bytes")
+
+    runtime_client = _FakeSupabaseRuntimeClient()
+    runtime_client.storage.bucket.get_public_url = lambda _: (  # type: ignore[method-assign]
+        "http://host.docker.internal:54321/storage/v1/object/public/images/folder/x%20y.png"
+    )
+
+    monkeypatch.setenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH", str(tmp_path))
+    monkeypatch.delenv("SUPABASE_PUBLIC_URL", raising=False)
+    client = SupabaseClient(client=runtime_client)
+
+    assert client.get_public_url(bucket="images", path="x/y.png") == str(mapped_file)
+
+
+def test_supabase_client_public_url_falls_back_when_mount_path_missing_file(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    """If the mounted path is invalid on this host (no matching file), fall back to the public URL."""
+    from python_chat.persistence import SupabaseClient
+
+    runtime_client = _FakeSupabaseRuntimeClient()
+    public_url = "http://host.docker.internal:54321/storage/v1/object/public/images/folder/x%20y.png"
+    runtime_client.storage.bucket.get_public_url = lambda _: public_url  # type: ignore[method-assign]
+
+    monkeypatch.setenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH", str(tmp_path))
+    monkeypatch.delenv("SUPABASE_PUBLIC_URL", raising=False)
+    client = SupabaseClient(client=runtime_client)
+
+    assert client.get_public_url(bucket="images", path="x/y.png") == public_url
+
+
+def test_supabase_client_public_url_maps_directory_object_to_nested_file(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    from python_chat.persistence import SupabaseClient
+
+    runtime_client = _FakeSupabaseRuntimeClient()
+    runtime_client.storage.bucket.get_public_url = lambda _: (  # type: ignore[method-assign]
+        "http://host.docker.internal:54321/storage/v1/object/public/images/2026/08/01/file.png"
+    )
+
+    object_dir = tmp_path / "2026" / "08" / "01" / "file.png"
+    object_dir.mkdir(parents=True)
+    nested_file = object_dir / "content"
+    nested_file.write_bytes(b"png-bytes")
+
+    monkeypatch.setenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH", str(tmp_path))
+    client = SupabaseClient(client=runtime_client)
+
+    assert client.get_public_url(bucket="images", path="x/y.png") == str(nested_file)
+
+
+def test_supabase_client_public_url_mount_path_blocks_path_traversal(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    """A crafted object key with '../' segments must not escape the mount root."""
+    from python_chat.persistence import SupabaseClient
+
+    mount_root = tmp_path / "mount"
+    mount_root.mkdir()
+
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("top-secret-local-file-contents")
+
+    runtime_client = _FakeSupabaseRuntimeClient()
+    runtime_client.storage.bucket.get_public_url = lambda _: (  # type: ignore[method-assign]
+        "http://host.docker.internal:54321/storage/v1/object/public/images/"
+        "..%2f..%2fsecret.txt"
+    )
+
+    monkeypatch.setenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH", str(mount_root))
+    client = SupabaseClient(client=runtime_client)
+
+    resolved = client.get_public_url(bucket="images", path="x/y.png")
+
+    assert resolved is not None
+    resolved_path = Path(resolved)
+    if resolved_path.exists():
+        assert (
+            resolved_path.resolve() != secret_file.resolve()
+        ), f"path traversal exposed local file outside mount root: {resolved_path}"
+
+
 def test_supabase_client_safe_when_disabled_and_errors() -> None:
     from python_chat.persistence import SupabaseClient
 
