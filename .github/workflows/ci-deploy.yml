@@ -126,6 +126,7 @@ jobs:
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ github.repository }}
+      VERSION_TAG: ${{ github.sha }}-short
 
     steps:
       - name: Checkout Repository
@@ -146,7 +147,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-short
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
           # Sets the target stage to build
           target: # optional
           # Ulimit options (e.g., nofile=1024:1024)
@@ -166,18 +167,22 @@ jobs:
       IMAGE_NAME: ${{ github.repository }}
       APP_NAME: fond-felecia
       SERVICE_NAME: python-chat
+      USERNAME: ${{ github.actor }}
+      VERSION_TAG: ${{ github.sha }}-short
 
     steps:
       - name: Use Koyeb
         uses: koyeb-community/koyeb-actions@v2
-        with: ${{ secrets.KOYEB_API_TOKEN }}
+        with: 
+          ${{ secrets.KOYEB_API_TOKEN }}
+          
 
       - name: Koyeb Deploy
         uses: koyeb/action-git-deploy@v1
         with:
-          app-name: my-app
-          service-name: my-service
-          docker: docker.io/myuser/myimage:1.2.3
+          app-name: ${{ env.APP_NAME}}
+          service-name: ${{ env.SERVICE_NAME }}
+          docker: ${{env.REGISTRY}}/${{env.USERNAME}}/${{env.IMAGE_NAME}}:${{ env.VERSION_TAG }}
     
         
        
