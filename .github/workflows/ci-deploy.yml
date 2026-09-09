@@ -184,11 +184,20 @@ jobs:
       SERVICE_NAME: python-chat
 
     steps:          
+      - name: Validate KOYEB_API_TOKEN secret
+        env:
+          KOYEB_API_TOKEN: ${{ secrets.KOYEB_API_TOKEN }}
+        run: |
+          if [ -z "${KOYEB_API_TOKEN:-}" ]; then
+            echo "KOYEB_API_TOKEN secret is not set"
+            exit 1
+          fi
+          
       - name: Use Koyeb
         uses: koyeb-community/koyeb-actions@v2
         with:
           api_token: ${{ secrets.KOYEB_API_TOKEN }}
-
+          
       - name: Koyeb Deploy
         uses: koyeb/action-git-deploy@v1
         with:
