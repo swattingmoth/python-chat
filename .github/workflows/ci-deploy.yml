@@ -173,9 +173,8 @@ jobs:
     steps:
       - name: Use Koyeb
         uses: koyeb-community/koyeb-actions@v2
-        with: 
-          ${{ secrets.KOYEB_API_TOKEN }}
-          
+        with:
+          api_token: ${{ secrets.KOYEB_API_TOKEN }}
 
       - name: Koyeb Deploy
         uses: koyeb/action-git-deploy@v1
