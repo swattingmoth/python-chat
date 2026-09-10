@@ -286,13 +286,13 @@ def launch_app(
                 yield chat_history, "", gr.skip(), runtime
                 return
 
-            for updated_history, image_data, updated_runtime in chat_interface.chat(
+            for updated_history, image_path, updated_runtime in chat_interface.chat(
                 message,
                 chat_history,
                 selected_choice,
                 runtime=runtime,
             ):
-                yield updated_history, "", image_data or gr.skip(), updated_runtime
+                yield updated_history, "", image_path or gr.skip(), updated_runtime
 
         def handle_clear(
             state: SessionRuntime,

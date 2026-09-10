@@ -51,27 +51,33 @@ def _normalize_public_storage_url(url: str) -> str:
     path (for Gradio-safe local rendering).
     """
 
-    def _resolve_object_file_path(candidate_path: Path, fallback_path: str) -> str:
+    def _resolve_object_file_path(candidate_path: Path, fallback_url: str) -> str:
         """Resolve a filesystem path to a readable file for Gradio.
 
         Some local Supabase storage layouts represent an object key as a
         directory containing internal files. If the mapped path is a directory,
-        return the first file found inside it.
+        return the first file found inside it. If nothing is found on disk
+        (e.g. the mount path is not valid on this host), fall back to the
+        original public URL rather than a nonexistent local path.
         """
+        logger.info(
+            f"Resolving object file path for candidate: {candidate_path}, fallback URL: {fallback_url}"
+        )
+
         if not candidate_path.exists():
-            return fallback_path
+            return fallback_url
 
         if candidate_path.is_file():
             return str(candidate_path)
 
         if not candidate_path.is_dir():
-            return str(candidate_path)
+            return fallback_url
 
         for p in candidate_path.rglob("*"):
             if p.is_file():
                 return str(p)
 
-        return str(candidate_path)
+        return fallback_url
 
     parsed_url = urllib_parse.urlparse(url)
 
@@ -93,9 +99,7 @@ def _normalize_public_storage_url(url: str) -> str:
         object_key = safe_object_key
         if image_bucket_mount_path.startswith("/"):
             mount_root = Path(str(PurePosixPath(image_bucket_mount_path)))
-            mapped_path = Path(
-                str(PurePosixPath(image_bucket_mount_path) / object_key)
-            )
+            mapped_path = Path(str(PurePosixPath(image_bucket_mount_path) / object_key))
         else:
             mount_root = Path(image_bucket_mount_path)
             mapped_path = mount_root / object_key
@@ -104,7 +108,7 @@ def _normalize_public_storage_url(url: str) -> str:
             mount_root_resolved = mount_root.resolve()
             mapped_resolved = mapped_path.resolve()
         except OSError:
-            return _resolve_object_file_path(mapped_path, str(mapped_path))
+            return _resolve_object_file_path(mapped_path, url)
 
         if not mapped_resolved.is_relative_to(mount_root_resolved):
             logger.warning(
@@ -112,7 +116,7 @@ def _normalize_public_storage_url(url: str) -> str:
             )
             return url
 
-        return _resolve_object_file_path(mapped_resolved, str(mapped_resolved))
+        return _resolve_object_file_path(mapped_resolved, url)
 
     return url
 

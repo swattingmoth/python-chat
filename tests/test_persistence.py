@@ -222,23 +222,42 @@ def test_supabase_client_upload_and_public_url_variants() -> None:
 
 def test_supabase_client_public_url_maps_to_local_mount_path(
     monkeypatch: Any,
+    tmp_path: Path,
 ) -> None:
     from python_chat.persistence import SupabaseClient
+
+    mapped_file = tmp_path / "folder" / "x y.png"
+    mapped_file.parent.mkdir(parents=True)
+    mapped_file.write_bytes(b"png-bytes")
 
     runtime_client = _FakeSupabaseRuntimeClient()
     runtime_client.storage.bucket.get_public_url = lambda _: (  # type: ignore[method-assign]
         "http://host.docker.internal:54321/storage/v1/object/public/images/folder/x%20y.png"
     )
 
-    monkeypatch.setenv(
-        "SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH", "/mnt/supabase-images"
-    )
+    monkeypatch.setenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH", str(tmp_path))
     monkeypatch.delenv("SUPABASE_PUBLIC_URL", raising=False)
     client = SupabaseClient(client=runtime_client)
 
-    assert client.get_public_url(bucket="images", path="x/y.png") == (
-        "/mnt/supabase-images/folder/x y.png"
-    )
+    assert client.get_public_url(bucket="images", path="x/y.png") == str(mapped_file)
+
+
+def test_supabase_client_public_url_falls_back_when_mount_path_missing_file(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    """If the mounted path is invalid on this host (no matching file), fall back to the public URL."""
+    from python_chat.persistence import SupabaseClient
+
+    runtime_client = _FakeSupabaseRuntimeClient()
+    public_url = "http://host.docker.internal:54321/storage/v1/object/public/images/folder/x%20y.png"
+    runtime_client.storage.bucket.get_public_url = lambda _: public_url  # type: ignore[method-assign]
+
+    monkeypatch.setenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH", str(tmp_path))
+    monkeypatch.delenv("SUPABASE_PUBLIC_URL", raising=False)
+    client = SupabaseClient(client=runtime_client)
+
+    assert client.get_public_url(bucket="images", path="x/y.png") == public_url
 
 
 def test_supabase_client_public_url_maps_directory_object_to_nested_file(

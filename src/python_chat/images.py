@@ -87,6 +87,8 @@ def generate_image(
             "Image file path is None. Image was not saved locally or uploaded to storage."
         )
 
+    logger.info(f"Generated image file: {image_file}, cost: {image_cost}")
+
     return (image_file, image_cost)
 
 
