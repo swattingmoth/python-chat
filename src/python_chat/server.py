@@ -14,7 +14,7 @@ from python_chat.app import configure_logging, launch_app
 from python_chat.chatbot import initialize_runtime
 from python_chat.context import ModelContext
 from python_chat.dotenv_loader import load_env_file
-from python_chat.utils import get_environment
+from python_chat.utils import get_environment, get_project_version
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +212,7 @@ def _resolve_identity(request: gr.Request | None) -> tuple[str | None, str | Non
 def create_server_app() -> FastAPI:
     load_env_file()
     configure_logging()
+    logger.info("Starting python-chat version %s", get_project_version())
     initialize_runtime()
 
     app = FastAPI(title="python-chat API")
