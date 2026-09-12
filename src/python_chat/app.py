@@ -1,5 +1,6 @@
 import atexit
 import datetime
+import html
 import json
 import logging
 import os
@@ -19,6 +20,21 @@ from python_chat.utils import get_environment
 logger = logging.getLogger(__name__)
 
 IdentityResolver = Callable[[gr.Request | None], tuple[str | None, str | None]]
+
+
+def build_image_display_html(image_url: str) -> str:
+    """Build an HTML block showing the image with a button to copy its URL."""
+    escaped_url_attr = html.escape(image_url, quote=True)
+    escaped_url_js = json.dumps(image_url)
+    return f"""
+<div style='display:flex;flex-direction:column;gap:8px;align-items:flex-start;'>
+  <img src='{escaped_url_attr}' alt='Generated image' style='max-width:100%;border-radius:8px;' />
+  <button type='button' onclick='navigator.clipboard.writeText({escaped_url_js})'
+    style='padding:6px 12px;border:1px solid #d1d5db;border-radius:8px;background:#f9fafb;cursor:pointer;'>
+    Copy image URL
+  </button>
+</div>
+"""
 
 
 class _JsonFormatter(logging.Formatter):
@@ -230,7 +246,7 @@ def launch_app(
         chatbot = gr.Chatbot(label="Chat", height=400)
         session_state = gr.State(value=build_default_runtime())
 
-        image_output = gr.Image(label="Generated Image", visible=False, type="filepath")
+        image_output = gr.HTML(label="Generated Image", visible=False)
 
         with gr.Row():
             message_input = gr.Textbox(
@@ -254,7 +270,7 @@ def launch_app(
             return (
                 updated_history,
                 "",
-                gr.update(value=None, visible=(selected_choice == "Generate Image")),
+                gr.update(value="", visible=(selected_choice == "Generate Image")),
                 runtime,
             )
 
@@ -292,7 +308,10 @@ def launch_app(
                 selected_choice,
                 runtime=runtime,
             ):
-                yield updated_history, "", image_path or gr.skip(), updated_runtime
+                image_html = (
+                    build_image_display_html(image_path) if image_path else gr.skip()
+                )
+                yield updated_history, "", image_html, updated_runtime
 
         def handle_clear(
             state: SessionRuntime,
@@ -313,7 +332,7 @@ def launch_app(
             cleared_history = chat_interface.clear_history()
             runtime["session_id"] = None
             runtime["session_mode"] = None
-            return cleared_history, "", None, runtime
+            return cleared_history, "", "", runtime
 
         submit_event = {
             "fn": handle_submit,

@@ -77,6 +77,9 @@ class _FakeGr:
     def Image(self, **kwargs: Any) -> _FakeComponent:  # noqa: N802
         return _FakeComponent(self.registry, **kwargs)
 
+    def HTML(self, **kwargs: Any) -> _FakeComponent:  # noqa: N802
+        return _FakeComponent(self.registry, **kwargs)
+
     def Textbox(self, **kwargs: Any) -> _FakeComponent:  # noqa: N802
         return _FakeComponent(self.registry, **kwargs)
 
@@ -174,8 +177,8 @@ def test_launch_app_registers_handlers_and_executes_callbacks(monkeypatch: Any) 
     on_choice_change = fake_gr.registry["change"][0]["fn"]
     _, _, show, show_state = on_choice_change("Generate Image", {})
     _, _, hide, hide_state = on_choice_change("Question", {})
-    assert show == {"value": None, "visible": True}
-    assert hide == {"value": None, "visible": False}
+    assert show == {"value": "", "visible": True}
+    assert hide == {"value": "", "visible": False}
     assert show_state["selected_choice"] == "Generate Image"
     assert hide_state["selected_choice"] == "Question"
 

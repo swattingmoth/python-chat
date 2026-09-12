@@ -42,85 +42,6 @@ def _sanitize_object_key(object_key: str) -> str | None:
     return "/".join(segments)
 
 
-def _normalize_public_storage_url(url: str) -> str:
-    """Normalize a Supabase public storage URL for browser clients.
-
-    `SUPABASE_URL` can differ between server-side connectivity and browser
-    accessibility (for example, `host.docker.internal` inside Docker).
-    This helper can either map public storage URLs to a mounted local file
-    path (for Gradio-safe local rendering).
-    """
-
-    def _resolve_object_file_path(candidate_path: Path, fallback_url: str) -> str:
-        """Resolve a filesystem path to a readable file for Gradio.
-
-        Some local Supabase storage layouts represent an object key as a
-        directory containing internal files. If the mapped path is a directory,
-        return the first file found inside it. If nothing is found on disk
-        (e.g. the mount path is not valid on this host), fall back to the
-        original public URL rather than a nonexistent local path.
-        """
-        logger.info(
-            f"Resolving object file path for candidate: {candidate_path}, fallback URL: {fallback_url}"
-        )
-
-        if not candidate_path.exists():
-            return fallback_url
-
-        if candidate_path.is_file():
-            return str(candidate_path)
-
-        if not candidate_path.is_dir():
-            return fallback_url
-
-        for p in candidate_path.rglob("*"):
-            if p.is_file():
-                return str(p)
-
-        return fallback_url
-
-    parsed_url = urllib_parse.urlparse(url)
-
-    image_bucket_mount_path = _normalize_config_value(
-        os.getenv("SUPABASE_PUBLIC_IMAGE_BUCKET_MOUNT_PATH")
-    )
-    public_image_path_prefix = "/storage/v1/object/public/images/"
-    if image_bucket_mount_path and parsed_url.path.startswith(public_image_path_prefix):
-        object_key = urllib_parse.unquote(
-            parsed_url.path.removeprefix(public_image_path_prefix)
-        ).lstrip("/")
-        safe_object_key = _sanitize_object_key(object_key)
-        if safe_object_key is None:
-            logger.warning(
-                "Rejected image object key with path traversal segments: %r",
-                object_key,
-            )
-            return url
-        object_key = safe_object_key
-        if image_bucket_mount_path.startswith("/"):
-            mount_root = Path(str(PurePosixPath(image_bucket_mount_path)))
-            mapped_path = Path(str(PurePosixPath(image_bucket_mount_path) / object_key))
-        else:
-            mount_root = Path(image_bucket_mount_path)
-            mapped_path = mount_root / object_key
-
-        try:
-            mount_root_resolved = mount_root.resolve()
-            mapped_resolved = mapped_path.resolve()
-        except OSError:
-            return _resolve_object_file_path(mapped_path, url)
-
-        if not mapped_resolved.is_relative_to(mount_root_resolved):
-            logger.warning(
-                "Rejected mapped image path outside mount root: %s", mapped_resolved
-            )
-            return url
-
-        return _resolve_object_file_path(mapped_resolved, url)
-
-    return url
-
-
 class HttpRpcClient:
     """Simple PostgREST RPC client for explicit role-scoped execution."""
 
@@ -303,11 +224,11 @@ class SupabaseClient:
         try:
             response = self._client.storage.from_(bucket).get_public_url(path)
             if isinstance(response, str):
-                return _normalize_public_storage_url(response)
+                return response
             if isinstance(response, dict):
                 maybe_url = response.get("publicUrl")
                 if isinstance(maybe_url, str):
-                    return _normalize_public_storage_url(maybe_url)
+                    return maybe_url
                 return None
             return None
         except Exception as exc:
