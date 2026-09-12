@@ -1,6 +1,6 @@
 [project]
 name = "python-chat"
-version = "0.1.0"
+version = "0.1.1"
 description = "Production-grade LLM chatbot using xAI SDK (native, not compat). Streaming + tools (client/server) + image gen + Gradio UI. Full type safety (mypy strict), tests for every public API, uv packaging."
 readme = "README.md"
 authors = [

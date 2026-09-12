@@ -128,20 +128,11 @@ uv run python -c "from python_chat import hello_world; print(hello_world())"
    ```
    IMAGE_FOLDER=c:/temp/images   # or any writable dir; will be created if needed
    SUPABASE_URL=https://<project-ref>.supabase.co
-   SUPABASE_STORAGE_CONTAINER_NAME=supabase-storage
-   SUPABASE_IMAGE_BUCKET_CONTAINER_PATH=/var/lib/storage/images
    SUPABASE_ANON_KEY=your_anon_key
    SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
    ```
 
 `SUPABASE_URL` is used by the backend runtime. 
-
-For local Docker runs with a local Supabase stack, set
-`SUPABASE_STORAGE_CONTAINER_NAME` to the running Supabase storage container name
-and `SUPABASE_IMAGE_BUCKET_CONTAINER_PATH` to the in-container path for the
-`images` bucket. The deploy script shares that container's volumes with the app
-container (read-only) and the runtime returns local file paths to Gradio. Returning http paths 
-when running locally results in `safehttpx` errors.
 
 2. Launch:
 
