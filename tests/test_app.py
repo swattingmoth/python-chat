@@ -154,6 +154,18 @@ def test_configure_logging_uses_root_handlers_for_local_and_server(
     assert root_logger.addHandler.call_count == 3
 
 
+def test_build_image_display_html_escapes_url_and_renders_copy_button() -> None:
+    image_url = "https://example.com/image?name='demo'&size=large"
+
+    rendered = app_module.build_image_display_html(image_url)
+
+    assert "<img" in rendered
+    assert "Copy image URL" in rendered
+    assert "navigator.clipboard.writeText(" in rendered
+    assert "src='https://example.com/image?name=&#x27;demo&#x27;&amp;size=large'" in rendered
+    assert "navigator.clipboard.writeText(\"https://example.com/image?name='demo'&size=large\")" in rendered
+
+
 def test_launch_app_registers_handlers_and_executes_callbacks(monkeypatch: Any) -> None:
     fake_gr = _FakeGr()
     model_context = SimpleNamespace(
