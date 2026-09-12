@@ -56,7 +56,9 @@ def generate_image(
     image_cost = image_response.cost_usd or 0.0
     image_file = None
     if get_environment() == "development":
-        image_file = ensure_local_image_copy(image_path, image_name, image_data)
+        image_file = (
+            f"file://{ensure_local_image_copy(image_path, image_name, image_data)}"
+        )
         logger.info(f"Generated image saved to {image_file}")
 
     model_context = ModelContext.current()
@@ -74,18 +76,14 @@ def generate_image(
                 bucket="images",
                 path=remote_path,
             )
-            if public_url:
-                image_file = public_url
-            else:
-                image_file = remote_path
+
+            if not public_url:
+                raise RuntimeError("Failed to obtain public URL for uploaded image")
+
+            image_file = public_url
 
         except Exception as exc:
-            logger.warning("Image upload to storage failed: %s", exc)
-
-    if not image_file:
-        logger.warning(
-            "Image file path is None. Image was not saved locally or uploaded to storage."
-        )
+            raise RuntimeError("Image upload to storage failed") from exc
 
     logger.info(f"Generated image file: {image_file}, cost: {image_cost}")
 

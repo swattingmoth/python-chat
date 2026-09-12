@@ -49,7 +49,7 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
         patch("python_chat.images.uuid.uuid4") as mock_uuid,
         patch(
             "python_chat.images.ensure_local_image_copy",
-            return_value="/tmp/test-images/fake.png",
+            return_value="c:/tmp/test-images/fake.png",
         ) as mock_local_copy,
     ):
         mock_uuid.return_value = "test-uuid-1234"
@@ -59,7 +59,7 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
             prompt="a cat in hat",
             model=Models.IMAGES,
             client=fake_client,
-            image_path="/tmp/test-images",
+            image_path="c:/tmp/test-images",
         )
 
         # API called with wrapped system prompt + user prompt
@@ -70,10 +70,10 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
         assert call_kwargs["image_format"] == "base64"
 
         mock_local_copy.assert_called_once_with(
-            "/tmp/test-images", "test-uuid-1234.png", b"\x89PNG..."
+            "c:/tmp/test-images", "test-uuid-1234.png", b"\x89PNG..."
         )
 
-        assert path == "/tmp/test-images/fake.png"
+        assert path == "file://c:/tmp/test-images/fake.png"
         assert cost == 0.05
 
 
