@@ -8,7 +8,7 @@ def get_environment() -> str:
 
 
 def get_project_version() -> str:
-    """Read the package version from pyproject.toml, searching upward from start_path."""
+    """Return the installed package version, or ``"unknown"`` if unavailable."""
     try:
         return version("python-chat")
     except PackageNotFoundError:
