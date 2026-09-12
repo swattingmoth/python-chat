@@ -167,7 +167,7 @@ def test_build_image_display_html_escapes_url_and_renders_copy_button() -> None:
         in rendered
     )
     assert (
-        "navigator.clipboard.writeText(\"https://example.com/image?name='demo'&size=large\")"
+        "navigator.clipboard.writeText(&quot;https://example.com/image?name=&#x27;demo&#x27;&amp;size=large&quot;)"
         in rendered
     )
 
