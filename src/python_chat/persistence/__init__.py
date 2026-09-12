@@ -29,18 +29,6 @@ def _normalize_config_value(value: str | None) -> str | None:
     return normalized if normalized else None
 
 
-def _sanitize_object_key(object_key: str) -> str | None:
-    """Strip redundant segments and reject any '..' traversal segment."""
-    segments = [
-        segment
-        for segment in object_key.replace("\\", "/").split("/")
-        if segment not in ("", ".")
-    ]
-    if any(segment == ".." for segment in segments):
-        return None
-    return "/".join(segments)
-
-
 class HttpRpcClient:
     """Simple PostgREST RPC client for explicit role-scoped execution."""
 
