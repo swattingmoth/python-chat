@@ -17,7 +17,7 @@ import pytest
 from python_chat.api import Models
 from python_chat.context import ModelContext
 from python_chat.images import generate_image, generate_image_tool
-from python_chat.tools import ToolResult
+from python_chat.tools import ToolResult, Tools
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +44,15 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
     fake_client.image.sample.return_value = SimpleNamespace(
         image=b"\x89PNG...", cost_usd=0.05
     )
+
+    upload_bytes = MagicMock()
+    get_public_url = MagicMock(return_value="https://example.test/image.png")
+    persistence_client = SimpleNamespace(
+        upload_bytes=upload_bytes,
+        get_public_url=get_public_url,
+    )
+    ModelContext.reset()
+    ModelContext.create(MagicMock(), "c:/tmp", persistence_client=persistence_client)  # type: ignore[arg-type]
 
     with (
         patch("python_chat.images.uuid.uuid4") as mock_uuid,
@@ -73,7 +82,7 @@ def test_generate_image_calls_api_writes_file_and_returns_path_bytes() -> None:
             "c:/tmp/test-images", "test-uuid-1234.png", b"\x89PNG..."
         )
 
-        assert path == "file://c:/tmp/test-images/fake.png"
+        assert path == "https://example.test/image.png"
         assert cost == 0.05
 
 
@@ -135,6 +144,41 @@ def test_generate_image_tool_handles_missing_image_path() -> None:
     assert result.metadata == {}
 
 
+def test_generate_image_tool_raises_when_generation_fails() -> None:
+    """Image generation errors bubble up so the outer tool runner can convert them to a user-safe error."""
+    with patch(
+        "python_chat.images.generate_image",
+        side_effect=RuntimeError("Image upload to storage failed"),
+    ):
+        with pytest.raises(RuntimeError, match="Image upload to storage failed"):
+            generate_image_tool("draw a tree", "tool-call-4")
+
+
+def test_tools_handle_tool_calls_catches_generate_image_exceptions() -> None:
+    """The upstream tool dispatcher converts image-generation exceptions into a safe ToolResult."""
+    active_tools = Tools.register_tool([], generate_image_tool, name="generate_image")
+    tool_calls = [
+        SimpleNamespace(
+            id="call_error",
+            function=SimpleNamespace(
+                name="generate_image",
+                arguments='{"prompt":"draw a tree"}',
+            ),
+        )
+    ]
+
+    with patch(
+        "python_chat.images.generate_image",
+        side_effect=RuntimeError("Image upload to storage failed"),
+    ):
+        results = Tools.handle_tool_calls(active_tools, tool_calls)  # pyright: ignore
+
+    assert len(results) == 1
+    assert results[0].content_for_model == "Error executing tool generate_image"
+    assert results[0].content is None
+    assert results[0].tool_call_id == "call_error"
+
+
 def test_generate_image_tool_propagates_context_errors() -> None:
     """If no context initialized, current() raises (tool does not swallow)."""
     ModelContext.reset()  # force uninitialized
@@ -166,7 +210,6 @@ def test_generate_image_uploads_and_uses_public_url(monkeypatch: Any) -> None:
         model=Models.IMAGES,
         client=fake_client,
         image_path="c:/tmp",
-        upload_to_storage=True,
     )
 
     assert image_file == "https://example.test/image.png"
@@ -179,6 +222,16 @@ def test_generate_image_sets_tool_cost(monkeypatch: Any) -> None:
     fake_client = MagicMock()
     fake_client.image.sample.return_value = SimpleNamespace(image=b"png", cost_usd=0.05)
 
+    upload_bytes = MagicMock()
+    get_public_url = MagicMock(return_value="https://example.test/image.png")
+    persistence_client = SimpleNamespace(
+        upload_bytes=upload_bytes,
+        get_public_url=get_public_url,
+    )
+
+    ModelContext.reset()
+    ModelContext.create(MagicMock(), "c:/tmp", persistence_client=persistence_client)  # type: ignore[arg-type]
+
     monkeypatch.setattr(
         "python_chat.images.ensure_local_image_copy",
         lambda *_: "c:/tmp/local.png",
@@ -189,7 +242,22 @@ def test_generate_image_sets_tool_cost(monkeypatch: Any) -> None:
         model=Models.IMAGES,
         client=fake_client,
         image_path="c:/tmp",
-        upload_to_storage=False,
     )
 
     assert estimated_cost == 0.05
+
+
+def test_generate_image_fails_without_persistence_client() -> None:
+    fake_client = MagicMock()
+    fake_client.image.sample.return_value = SimpleNamespace(image=b"png", cost_usd=0.0)
+
+    ModelContext.reset()
+    ModelContext.create(MagicMock(), "c:/tmp", persistence_client=None)
+
+    with pytest.raises(RuntimeError, match="Persistence client is not available"):
+        generate_image(
+            prompt="tree",
+            model=Models.IMAGES,
+            client=fake_client,
+            image_path="c:/tmp",
+        )

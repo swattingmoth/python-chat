@@ -19,8 +19,6 @@ def generate_image(
     model: str,
     client: Client,
     image_path: str,
-    *,
-    upload_to_storage: bool = True,
 ) -> tuple[str | None, float]:
     """Generate an image using the xAI image API and save it locally.
 
@@ -38,6 +36,11 @@ def generate_image(
     Returns:
         A tuple of (saved_file_path, image_cost).
     """
+
+    model_context = ModelContext.current()
+    if not model_context.persistence_client:
+        raise RuntimeError("Persistence client is not available")
+
     image_system_prompt = (
         "Generate an image based on the request below. The generated image must not "
         "include any nudity, suggestive content, or graphic violence. If requested, "
@@ -56,34 +59,30 @@ def generate_image(
     image_cost = image_response.cost_usd or 0.0
     image_file = None
     if get_environment() == "development":
-        image_file = (
-            f"file://{ensure_local_image_copy(image_path, image_name, image_data)}"
+        local_image_file = ensure_local_image_copy(image_path, image_name, image_data)
+        logger.info(f"Generated image saved to {local_image_file}")
+
+    ymd = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+    remote_path = f"{ymd}/{image_name}"
+    try:
+        model_context.persistence_client.upload_bytes(
+            bucket="images",
+            path=remote_path,
+            data=image_data,
+            content_type="image/png",
         )
-        logger.info(f"Generated image saved to {image_file}")
+        public_url = model_context.persistence_client.get_public_url(
+            bucket="images",
+            path=remote_path,
+        )
 
-    model_context = ModelContext.current()
-    if upload_to_storage and model_context.persistence_client:
-        ymd = datetime.now(timezone.utc).strftime("%Y/%m/%d")
-        remote_path = f"{ymd}/{image_name}"
-        try:
-            model_context.persistence_client.upload_bytes(
-                bucket="images",
-                path=remote_path,
-                data=image_data,
-                content_type="image/png",
-            )
-            public_url = model_context.persistence_client.get_public_url(
-                bucket="images",
-                path=remote_path,
-            )
+        if not public_url:
+            raise RuntimeError("Failed to obtain public URL for uploaded image")
 
-            if not public_url:
-                raise RuntimeError("Failed to obtain public URL for uploaded image")
+        image_file = public_url
 
-            image_file = public_url
-
-        except Exception as exc:
-            raise RuntimeError("Image upload to storage failed") from exc
+    except Exception as exc:
+        raise RuntimeError("Image upload to storage failed") from exc
 
     logger.info(f"Generated image file: {image_file}, cost: {image_cost}")
 
