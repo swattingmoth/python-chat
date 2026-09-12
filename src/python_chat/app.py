@@ -25,7 +25,7 @@ IdentityResolver = Callable[[gr.Request | None], tuple[str | None, str | None]]
 def build_image_display_html(image_url: str) -> str:
     """Build an HTML block showing the image with a button to copy its URL."""
     escaped_url_attr = html.escape(image_url, quote=True)
-    escaped_url_js = json.dumps(image_url)
+    escaped_url_js = html.escape(json.dumps(image_url), quote=True)
     return f"""
 <div style='display:flex;flex-direction:column;gap:8px;align-items:flex-start;'>
   <img src='{escaped_url_attr}' alt='Generated image' style='max-width:100%;border-radius:8px;' />
