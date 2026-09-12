@@ -26,7 +26,8 @@ def generate_image(
     The image is requested in base64 format for direct byte access without
     additional network fetches. The image is saved using the persistence client on the model context.
 
-    In development, the image is also saved locally to image_pathfor easier access and debugging.
+    In development, the image is also saved locally to image_path for easier access
+    and debugging.
 
     Args:
         prompt: The user's image generation request.
