@@ -6,11 +6,10 @@ import os
 import queue
 import threading
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 from urllib import error as urllib_error
-from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from uuid import uuid4
 
