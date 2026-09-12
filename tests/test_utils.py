@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
 import pytest
@@ -30,9 +31,12 @@ def test_get_project_version_reads_version_from_pyproject_toml() -> None:
     assert version[0].isdigit()
 
 
-def test_get_project_version_returns_unknown_when_pyproject_missing(
-    tmp_path: Path,
+def test_get_project_version_returns_unknown_when_package_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_path = tmp_path / "python_chat" / "utils.py"
+    def _raise_package_not_found(_: str) -> str:
+        raise PackageNotFoundError
 
-    assert get_project_version(start_path=isolated_path) == "unknown"
+    monkeypatch.setattr("python_chat.utils.version", _raise_package_not_found)
+
+    assert get_project_version() == "unknown"

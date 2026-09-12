@@ -24,8 +24,9 @@ def generate_image(
 
     A safety system prompt is prepended to the user prompt to guide generation.
     The image is requested in base64 format for direct byte access without
-    additional network fetches. The result is saved as a .png file using a UUID
-    filename in the provided image_path directory.
+    additional network fetches. The image is saved using the persistence client on the model context.
+
+    In development, the image is also saved locally to image_pathfor easier access and debugging.
 
     Args:
         prompt: The user's image generation request.
