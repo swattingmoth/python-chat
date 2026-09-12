@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError
-from pathlib import Path
 
 import pytest
 

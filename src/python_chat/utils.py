@@ -1,7 +1,5 @@
 import os
-import tomllib
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 
 
 def get_environment() -> str:
