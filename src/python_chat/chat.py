@@ -374,22 +374,13 @@ class ChatInterface:
             tuple: Intermediate chat history, optional image data, and updated session runtime.
         """
         session_runtime = self._ensure_runtime(choice, runtime)
-        using_instance_state = runtime is None
         current_image_path = image_path if image_path is not None else self.image_path
         if not message:
             yield chat_history, current_image_path, session_runtime
             return
 
-        if using_instance_state:
-            message_history = self.chat_history
-            local_history = [message_to_dict(c) for c in message_history]
-        else:
-            local_history = [
-                item
-                for item in chat_history
-                if (item.get("metadata") or {}).get("status") != "pending"
-            ]
-            message_history = self._to_proto_history(local_history)
+        message_history = self.chat_history
+        local_history = [message_to_dict(c) for c in message_history]
 
         new_model = get_model_for_choice(choice)
         system_message = get_system_message_for_choice(choice)
@@ -639,8 +630,7 @@ class ChatInterface:
             local_history.append(message_to_dict(error_message))
             yield local_history, current_image_path, session_runtime
 
-        if using_instance_state:
-            self.image_path = current_image_path
+        self.image_path = current_image_path
 
     def clear_history(self) -> list[dict[str, Any]]:
         """Clear stored chat history and reset the image output."""

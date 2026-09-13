@@ -95,6 +95,7 @@ def make_tool_call_stream(
     tool_name: str = "today_date",
     arguments: str = "{}",
     preceding_text: str | None = None,
+    tool_call_id: str = "call_123",
 ) -> list[tuple[Any, Any]]:
     """Stream that ends with a (client-side) tool call on the final response.
 
@@ -104,7 +105,7 @@ def make_tool_call_stream(
     (to attach to assistant history entry).
     """
     pairs: list[tuple[Any, Any]] = []
-    tc = _make_tool_call("call_123", tool_name, arguments)
+    tc = _make_tool_call(tool_call_id, tool_name, arguments)
     if preceding_text:
         # Colocate the preceding text + tool_calls on the *same* (final) response/chunk pair.
         # This matches real xai-sdk stream behavior (last Response carries full .content
@@ -141,6 +142,9 @@ def make_multi_tool_call_stream() -> list[tuple[Any, Any]]:
 
 def create_responder(
     streams: list[list[tuple[Any, Any]]],
+    completer_calls: (
+        list[tuple[str, Sequence[chat_pb2.Message], list[Any]]] | None
+    ) = None,
 ) -> ChatCompleter:
     """Stateful fake completer that yields successive (response, chunk) streams.
 
@@ -153,6 +157,8 @@ def create_responder(
         model: str, messages: Sequence[chat_pb2.Message], tools: list[Any]
     ) -> Generator[tuple[Any, Any], None, None]:
         nonlocal call_idx
+        if completer_calls is not None:
+            completer_calls.append((model, messages, tools))
         stream = streams[min(call_idx, len(streams) - 1)]
         call_idx += 1
         for pair in stream:
@@ -289,7 +295,12 @@ def test_chat_multiple_turns_accumulates_history_correctly(
     chunks1 = make_text_only_stream("First answer.")
     chunks2 = make_text_only_stream("Second answer following up.")
 
-    iface = ChatInterface(mock_context, completer=create_responder([chunks1, chunks2]))
+    completer_calls: list[tuple[str, Sequence[chat_pb2.Message], list[Any]]] = []
+
+    iface = ChatInterface(
+        mock_context,
+        completer=create_responder([chunks1, chunks2], completer_calls=completer_calls),
+    )
 
     _ = list(iface.chat("First question", [], "Question"))
     yields2 = list(iface.chat("Follow up?", [], "Question"))
@@ -302,6 +313,19 @@ def test_chat_multiple_turns_accumulates_history_correctly(
     # The last yield of second turn contains the latest assistant message
     last_hist, _, _ = yields2[-1]
     assert "Second answer" in last_hist[-1]["content"]
+
+    assert len(completer_calls) == 2
+    messages1 = completer_calls[0][1]
+    assert len(messages1) == 2
+    assert messages1[0].role == chat_pb2.MessageRole.ROLE_SYSTEM
+    assert messages1[1].role == chat_pb2.MessageRole.ROLE_USER
+
+    messages2 = completer_calls[1][1]
+    assert len(messages2) == 4
+    assert messages2[0].role == chat_pb2.MessageRole.ROLE_SYSTEM
+    assert messages2[1].role == chat_pb2.MessageRole.ROLE_USER
+    assert messages2[2].role == chat_pb2.MessageRole.ROLE_ASSISTANT
+    assert messages2[3].role == chat_pb2.MessageRole.ROLE_USER
 
 
 def test_chat_handles_tool_call_and_continues_for_non_image_tool(
@@ -352,16 +376,18 @@ def test_chat_tool_call_to_generate_image_sets_image_and_stops(
 ) -> None:
     """Image generation tool path: special result type sets self.image_path, yields it, and breaks without extra completion."""
     # Model "says" something then calls the (fake) image tool
+    tool_call_id = "call_img"
     img_stream = make_tool_call_stream(
         tool_name="generate_image",
         preceding_text="Calling the image generation tool.",
+        tool_call_id=tool_call_id,
     )
 
     sample_image_path = "sampleimage.png"
     tool_result = ToolResult(
         content_for_model="Image generated successfully",
         content=sample_image_path,
-        tool_call_id="call_img",
+        tool_call_id=tool_call_id,
         content_type="image",
     )
     handler: ToolHandler = MagicMock(return_value=[tool_result])
