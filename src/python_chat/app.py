@@ -188,6 +188,8 @@ def launch_app(
             "model_name": get_model_for_choice(choice),
             "request_counter": 0,
             "active_tools": get_tools_for_choice(choice),
+            "chat_history": [],
+            "current_image_path": None,
         }
 
     def ensure_runtime(
@@ -329,10 +331,12 @@ def launch_app(
                     access_token=runtime.get("access_token"),
                 )
 
-            cleared_history = chat_interface.clear_history()
             runtime["session_id"] = None
             runtime["session_mode"] = None
-            return cleared_history, "", "", runtime
+            runtime["chat_history"] = []
+            runtime["current_image_path"] = None
+
+            return [], "", "", runtime
 
         submit_event = {
             "fn": handle_submit,
