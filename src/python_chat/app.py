@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Generator, Optional, cast
 
@@ -125,6 +126,212 @@ def get_tools_for_choice(choice: str) -> list[RegisteredTool]:
     return tools
 
 
+def resolve_identity(
+    state: SessionRuntime | dict[str, Any] | None = None,
+    request: gr.Request | None = None,
+    *,
+    identity_resolver: IdentityResolver | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve user identity from session state, request context, or development config."""
+    if state is not None and ("user_id" in state or "access_token" in state):
+        user_id = state.get("user_id")
+        access_token = state.get("access_token")
+        if (isinstance(user_id, str) or user_id is None) and (
+            isinstance(access_token, str) or access_token is None
+        ):
+            normalized_user_id = (
+                user_id.strip() if isinstance(user_id, str) else user_id
+            )
+            normalized_access_token = (
+                access_token.strip() if isinstance(access_token, str) else access_token
+            )
+            if normalized_user_id == "":
+                normalized_user_id = None
+            if normalized_access_token == "":
+                normalized_access_token = None
+            if normalized_user_id is not None or normalized_access_token is not None:
+                return normalized_user_id, normalized_access_token
+
+    if identity_resolver is not None:
+        return identity_resolver(request)
+
+    if get_environment() == "development":
+        return os.getenv("SUPABASE_AUTH_USER_ID"), None
+
+    return None, None
+
+
+def build_default_runtime(
+    choice: str = "Question",
+    request: gr.Request | None = None,
+    *,
+    identity_resolver: IdentityResolver | None = None,
+) -> SessionRuntime:
+    """Build a new session runtime for the selected mode."""
+    user_id, access_token = resolve_identity(
+        request=request, identity_resolver=identity_resolver
+    )
+    return {
+        "user_id": user_id,
+        "access_token": access_token,
+        "session_id": None,
+        "session_mode": None,
+        "selected_choice": choice,
+        "model_name": get_model_for_choice(choice),
+        "request_counter": 0,
+        "active_tools": get_tools_for_choice(choice),
+        "chat_history": [],
+        "current_image_path": None,
+    }
+
+
+def ensure_runtime(
+    state: SessionRuntime | dict[str, Any],
+    choice: str,
+    request: gr.Request | None = None,
+    *,
+    identity_resolver: IdentityResolver | None = None,
+) -> SessionRuntime:
+    """Merge persisted session state with current identity and mode settings."""
+    merged = build_default_runtime(
+        choice, request=request, identity_resolver=identity_resolver
+    )
+    user_id, access_token = resolve_identity(
+        state=state, request=request, identity_resolver=identity_resolver
+    )
+    merged["user_id"] = user_id
+    merged["access_token"] = access_token
+
+    session_id = state.get("session_id")
+    if isinstance(session_id, int) or session_id is None:
+        merged["session_id"] = session_id
+
+    session_mode = state.get("session_mode")
+    if isinstance(session_mode, str) or session_mode is None:
+        merged["session_mode"] = session_mode
+
+    request_counter = state.get("request_counter")
+    if isinstance(request_counter, int):
+        merged["request_counter"] = request_counter
+
+    merged["selected_choice"] = choice
+    merged["model_name"] = get_model_for_choice(choice)
+    merged["active_tools"] = get_tools_for_choice(choice)
+    merged["request_counter"] = int(merged.get("request_counter", 0)) + 1
+    merged["chat_history"] = state.get("chat_history", [])
+    merged["current_image_path"] = state.get("current_image_path")
+    return merged
+
+
+def shutdown_persistence(model_context: ModelContext) -> None:
+    """Complete the active session and stop the persistence worker."""
+    model_context.complete_session()
+    if not model_context.log_queue:
+        return
+    try:
+        model_context.log_queue.stop()
+    except RuntimeError:
+        pass
+
+
+def handle_clear(
+    state: SessionRuntime,
+    model_context: ModelContext,
+    request: gr.Request | None = None,
+    *,
+    identity_resolver: IdentityResolver | None = None,
+) -> tuple[list[dict[str, Any]], str, Optional[str], SessionRuntime]:
+    """Clear the current chat and complete its persisted session."""
+    runtime = ensure_runtime(
+        state,
+        state.get("selected_choice", "Question"),
+        request=request,
+        identity_resolver=identity_resolver,
+    )
+    if runtime.get("session_id") is not None:
+        model_context.complete_session_for(
+            runtime.get("session_id"),
+            access_token=runtime.get("access_token"),
+        )
+
+    runtime["session_id"] = None
+    runtime["session_mode"] = None
+    runtime["chat_history"] = []
+    runtime["current_image_path"] = None
+
+    return [], "", "", runtime
+
+
+def handle_submit(
+    message: str,
+    chat_history: list[dict[str, Any]],
+    selected_choice: str,
+    state: SessionRuntime,
+    chat_interface: ChatInterface,
+    request: gr.Request | None = None,
+    *,
+    identity_resolver: IdentityResolver | None = None,
+) -> Generator[
+    tuple[
+        list[dict[str, Any]],
+        str,
+        Optional[str] | dict[Any, Any],
+        SessionRuntime,
+    ],
+    None,
+    None,
+]:
+    """Handle message submission."""
+    runtime = ensure_runtime(
+        state,
+        selected_choice,
+        request=request,
+        identity_resolver=identity_resolver,
+    )
+    if not message:
+        yield chat_history, "", gr.skip(), runtime
+        return
+
+    for chat_result in chat_interface.chat(
+        message,
+        selected_choice,
+        runtime=runtime,
+    ):
+        image_path = chat_result.get("image_path")
+        image_html = build_image_display_html(image_path) if image_path else gr.skip()
+        yield chat_result["history"], "", image_html, chat_result["runtime"]
+
+
+def on_choice_change(
+    selected_choice: str,
+    state: SessionRuntime,
+    model_context: ModelContext,
+    request: gr.Request | None = None,
+    *,
+    identity_resolver: IdentityResolver | None = None,
+) -> tuple[list[dict[str, Any]], str, str | dict[Any, Any], SessionRuntime]:
+    """Reset the chat and update image visibility for the selected mode."""
+    updated_history, _, _, cleared_state = handle_clear(
+        state,
+        model_context,
+        request=request,
+        identity_resolver=identity_resolver,
+    )
+    runtime = ensure_runtime(
+        cleared_state,
+        selected_choice,
+        request=request,
+        identity_resolver=identity_resolver,
+    )
+
+    return (
+        updated_history,
+        "",
+        gr.update(value="", visible=(selected_choice == "Generate Image")),
+        runtime,
+    )
+
+
 def launch_app(
     *,
     identity_resolver: IdentityResolver | None = None,
@@ -133,106 +340,9 @@ def launch_app(
     model_context = ModelContext.current()
     chat_interface = ChatInterface(model_context)
 
-    def resolve_identity(
-        state: SessionRuntime | dict[str, Any] | None = None,
-        request: gr.Request | None = None,
-    ) -> tuple[str | None, str | None]:
-        # Priority 1: Session state
-        if state is not None and ("user_id" in state or "access_token" in state):
-            user_id = state.get("user_id")
-            access_token = state.get("access_token")
-            if (isinstance(user_id, str) or user_id is None) and (
-                isinstance(access_token, str) or access_token is None
-            ):
-                normalized_user_id = (
-                    user_id.strip() if isinstance(user_id, str) else user_id
-                )
-                normalized_access_token = (
-                    access_token.strip()
-                    if isinstance(access_token, str)
-                    else access_token
-                )
-                if normalized_user_id == "":
-                    normalized_user_id = None
-                if normalized_access_token == "":
-                    normalized_access_token = None
-                if (
-                    normalized_user_id is not None
-                    or normalized_access_token is not None
-                ):
-                    return normalized_user_id, normalized_access_token
-
-        # Priority 2: request-scoped resolver (FastAPI mount)
-        if identity_resolver is not None:
-            resolved_user_id, resolved_access_token = identity_resolver(request)
-            return resolved_user_id, resolved_access_token
-
-        # Development fallback only.
-        if get_environment() == "development":
-            user = os.getenv("SUPABASE_AUTH_USER_ID")
-            return user, None
-
-        return None, None
-
-    def build_default_runtime(
-        choice: str = "Question",
-        request: gr.Request | None = None,
-    ) -> SessionRuntime:
-        user_id, access_token = resolve_identity(request=request)
-        return {
-            "user_id": user_id,
-            "access_token": access_token,
-            "session_id": None,
-            "session_mode": None,
-            "selected_choice": choice,
-            "model_name": get_model_for_choice(choice),
-            "request_counter": 0,
-            "active_tools": get_tools_for_choice(choice),
-            "chat_history": [],
-            "current_image_path": None,
-        }
-
-    def ensure_runtime(
-        state: SessionRuntime,
-        choice: str,
-        request: gr.Request | None = None,
-    ) -> SessionRuntime:
-        merged = build_default_runtime(choice, request=request)
-        user_id, access_token = resolve_identity(state=state, request=request)
-        merged["user_id"] = user_id
-        merged["access_token"] = access_token
-
-        session_id = state.get("session_id")
-        if isinstance(session_id, int) or session_id is None:
-            merged["session_id"] = session_id
-
-        session_mode = state.get("session_mode")
-        if isinstance(session_mode, str) or session_mode is None:
-            merged["session_mode"] = session_mode
-
-        request_counter = state.get("request_counter")
-        if isinstance(request_counter, int):
-            merged["request_counter"] = request_counter
-
-        merged["selected_choice"] = choice
-        merged["model_name"] = get_model_for_choice(choice)
-        merged["active_tools"] = get_tools_for_choice(choice)
-        merged["request_counter"] = int(merged.get("request_counter", 0)) + 1
-        return merged
-
     if model_context.log_queue:
         start_log_worker(model_context.log_queue)
-
-        def _shutdown_persistence() -> None:
-            model_context.complete_session()
-            if not model_context.log_queue:
-                return
-            try:
-                model_context.log_queue.stop()
-            except RuntimeError:
-                pass
-
-        atexit.register(_shutdown_persistence)
+        atexit.register(partial(shutdown_persistence, model_context))
 
     with gr.Blocks(title="AI Assistant") as demo:
         gr.Markdown("# AI Assistant")
@@ -246,7 +356,9 @@ def launch_app(
             )
 
         chatbot = gr.Chatbot(label="Chat", height=400)
-        session_state = gr.State(value=build_default_runtime())
+        session_state = gr.State(
+            value=build_default_runtime(identity_resolver=identity_resolver)
+        )
 
         image_output = gr.HTML(label="Generated Image", visible=False)
 
@@ -260,86 +372,22 @@ def launch_app(
             submit_btn = gr.Button("Submit", variant="primary")
             clear_btn = gr.Button("Clear")
 
-        def on_choice_change(
-            selected_choice: str,
-            state: SessionRuntime,
-            request: gr.Request | None = None,
-        ) -> tuple[list[dict[str, Any]], str, str | dict[Any, Any], SessionRuntime]:
-            """Update image visibility based on choice (no longer mutates global tool registry)."""
-            updated_history, _, _, state = handle_clear(state, request=request)
-            runtime = ensure_runtime(state, selected_choice, request=request)
-
-            return (
-                updated_history,
-                "",
-                gr.update(value="", visible=(selected_choice == "Generate Image")),
-                runtime,
-            )
-
         choice.change(
-            fn=on_choice_change,
+            fn=partial(
+                on_choice_change,
+                model_context=model_context,
+                identity_resolver=identity_resolver,
+            ),
             inputs=[choice, session_state],
             outputs=[chatbot, message_input, image_output, session_state],
         )
 
-        def handle_submit(
-            message: str,
-            chat_history: list[dict[str, Any]],
-            selected_choice: str,
-            state: SessionRuntime,
-            request: gr.Request | None = None,
-        ) -> Generator[
-            tuple[
-                list[dict[str, Any]],
-                str,
-                Optional[str] | dict[Any, Any],
-                SessionRuntime,
-            ],
-            None,
-            None,
-        ]:
-            """Handle message submission."""
-            runtime = ensure_runtime(state, selected_choice, request=request)
-            if not message:
-                yield chat_history, "", gr.skip(), runtime
-                return
-
-            for updated_history, image_path, updated_runtime in chat_interface.chat(
-                message,
-                chat_history,
-                selected_choice,
-                runtime=runtime,
-            ):
-                image_html = (
-                    build_image_display_html(image_path) if image_path else gr.skip()
-                )
-                yield updated_history, "", image_html, updated_runtime
-
-        def handle_clear(
-            state: SessionRuntime,
-            request: gr.Request | None = None,
-        ) -> tuple[list[dict[str, Any]], str, Optional[str], SessionRuntime]:
-            """Handle clear button."""
-            runtime = ensure_runtime(
-                state,
-                state.get("selected_choice", "Question"),
-                request=request,
-            )
-            if runtime.get("session_id") is not None:
-                model_context.complete_session_for(
-                    runtime.get("session_id"),
-                    access_token=runtime.get("access_token"),
-                )
-
-            runtime["session_id"] = None
-            runtime["session_mode"] = None
-            runtime["chat_history"] = []
-            runtime["current_image_path"] = None
-
-            return [], "", "", runtime
-
         submit_event = {
-            "fn": handle_submit,
+            "fn": partial(
+                handle_submit,
+                chat_interface=chat_interface,
+                identity_resolver=identity_resolver,
+            ),
             "inputs": [message_input, chatbot, choice, session_state],
             "outputs": [chatbot, message_input, image_output, session_state],
         }
@@ -348,7 +396,11 @@ def launch_app(
         message_input.submit(**submit_event)  # type: ignore[arg-type]
 
         clear_btn.click(
-            fn=handle_clear,
+            fn=partial(
+                handle_clear,
+                model_context=model_context,
+                identity_resolver=identity_resolver,
+            ),
             inputs=[session_state],
             outputs=[chatbot, message_input, image_output, session_state],
         )
