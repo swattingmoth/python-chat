@@ -84,6 +84,14 @@ class SessionRuntime(TypedDict):
     model_name: str
     request_counter: int
     active_tools: list[RegisteredTool]
+    chat_history: list[chat_pb2.Message]
+    current_image_path: str | None
+
+
+class ChatResult(TypedDict):
+    history: list[dict[str, Any]]
+    image_path: str | None
+    runtime: SessionRuntime
 
 
 def get_model_for_choice(choice: str) -> str:
@@ -172,8 +180,6 @@ class ChatInterface:
             tool_handler (ToolHandler | None): Test-only override for executing tool calls
                 and returning responses/results.
         """
-        self.chat_history: list[chat_pb2.Message] = []
-        self.image_path: Optional[str] = None
         self.modelContext = modelContext
         self._completer: ChatCompleter = completer or self._default_completer
         self._tool_handler: ToolHandler = (
@@ -193,6 +199,8 @@ class ChatInterface:
                 "model_name": get_model_for_choice(choice),
                 "request_counter": 0,
                 "active_tools": [],
+                "chat_history": [],
+                "current_image_path": None,
             }
 
         resolved = dict(runtime)
@@ -203,6 +211,8 @@ class ChatInterface:
         resolved.setdefault("selected_choice", choice)
         resolved.setdefault("model_name", get_model_for_choice(choice))
         resolved.setdefault("active_tools", [])
+        resolved.setdefault("chat_history", [])
+        resolved.setdefault("current_image_path", None)
         request_counter = resolved.get("request_counter", 0)
         resolved["request_counter"] = (
             request_counter + 1 if isinstance(request_counter, int) else 1
@@ -345,51 +355,83 @@ class ChatInterface:
         """Default tool execution using the model context's registered tools."""
         return Tools.handle_tool_calls(active_tools, message)
 
-    def append_to_history(
-        self, history: list[chat_pb2.Message], message: chat_pb2.Message
+    def _update_history(
+        self,
+        session_runtime: SessionRuntime,
+        history: list[chat_pb2.Message],
+        message: chat_pb2.Message,
     ) -> None:
         """Append a message to the chat history."""
         history.append(message)
+        session_runtime["chat_history"] = history
         logger.debug(f"Appended message to history: {message_to_dict(message)}")
+
+    def get_history(
+        self,
+        history: list[chat_pb2.Message],
+        thinking: bool = False,
+        message: chat_pb2.Message | None = None,
+        calling_function: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve the chat history as a list of dictionaries."""
+        history_to_return = [
+            message_to_dict(msg)
+            for msg in history
+            if not msg.role == chat_pb2.MessageRole.ROLE_TOOL
+        ]
+
+        if message is not None:
+            history_to_return.append(message_to_dict(message))
+
+        if calling_function is not None:
+            history_to_return.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "title": f"Calling {calling_function}...",
+                        "status": "pending",
+                    },
+                }
+            )
+
+        if thinking:
+            history_to_return.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {"title": "Thinking"},
+                }
+            )
+        return history_to_return
 
     def chat(
         self,
         message: str,
-        chat_history: list[dict[str, Any]],
         choice: str,
         *,
         runtime: SessionRuntime | None = None,
-        image_path: Optional[str] = None,
-    ) -> Generator[
-        tuple[list[dict[str, Any]], Optional[str], SessionRuntime], None, None
-    ]:
+    ) -> Generator[ChatResult, None, None]:
         """Stream chat responses token by token and handle tool calls.
 
         Args:
             message (str): The user's input message.
-            chat_history (list[dict[str, Any]]): Current chat history from the UI.
+            runtime (SessionRuntime | None): The current session runtime containing chat history and other session-specific data.
             choice (str): Selected chat mode, such as question or image generation.
 
         Yields:
-            tuple: Intermediate chat history, optional image data, and updated session runtime.
+            ChatResult: Intermediate chat history, optional image data, and updated session runtime.
         """
         session_runtime = self._ensure_runtime(choice, runtime)
-        using_instance_state = runtime is None
-        current_image_path = image_path if image_path is not None else self.image_path
+        current_image_path = session_runtime.get("current_image_path")
+        local_history = list(session_runtime.get("chat_history", []))
         if not message:
-            yield chat_history, current_image_path, session_runtime
+            yield {
+                "history": self.get_history(local_history),
+                "image_path": current_image_path,
+                "runtime": session_runtime,
+            }
             return
-
-        if using_instance_state:
-            message_history = self.chat_history
-            local_history = [message_to_dict(c) for c in message_history]
-        else:
-            local_history = [
-                item
-                for item in chat_history
-                if (item.get("metadata") or {}).get("status") != "pending"
-            ]
-            message_history = self._to_proto_history(local_history)
 
         new_model = get_model_for_choice(choice)
         system_message = get_system_message_for_choice(choice)
@@ -401,61 +443,44 @@ class ChatInterface:
         logger.debug(f"System message:\n{system_message}")
 
         try:
-            if isinstance(self.modelContext, ModelContext):
-                session_id, session_mode = self.modelContext.ensure_session_for(
-                    mode=choice,
-                    user_id=session_runtime.get("user_id"),
-                    current_session_id=session_runtime.get("session_id"),
-                    current_session_mode=session_runtime.get("session_mode"),
-                    access_token=session_runtime.get("access_token"),
-                )
-            else:
-                session_id = self.modelContext.ensure_session(choice)
-                session_mode = choice if session_id is not None else None
+            session_id, session_mode = self.modelContext.ensure_session_for(
+                mode=choice,
+                user_id=session_runtime.get("user_id"),
+                current_session_id=session_runtime.get("session_id"),
+                current_session_mode=session_runtime.get("session_mode"),
+                access_token=session_runtime.get("access_token"),
+            )
             session_runtime["session_id"] = session_id
             session_runtime["session_mode"] = session_mode
 
             # Add user message to history
-            user_message = user(message)
-            self.append_to_history(message_history, user_message)
-            local_history.append(message_to_dict(user_message))
+            self._update_history(session_runtime, local_history, user(message))
             self._persist_message(
                 session_id=session_id,
                 role="user",
                 content=message,
                 access_token=session_runtime.get("access_token"),
             )
-            if isinstance(self.modelContext, ModelContext):
-                self.modelContext.enqueue_log_event_for(
-                    session_id,
-                    {
-                        "event": "user_message",
-                        "session_id": session_id,
-                        "choice": choice,
-                        "content": message,
-                    },
-                )
-            else:
-                self.modelContext.enqueue_log_event(
-                    {
-                        "event": "user_message",
-                        "session_id": session_id,
-                        "choice": choice,
-                        "content": message,
-                    }
-                )
-            yield local_history + [
+            self.modelContext.enqueue_log_event_for(
+                session_id,
                 {
-                    "role": "assistant",
-                    "content": "",
-                    "metadata": {"title": "Thinking...", "status": "pending"},
-                }
-            ], current_image_path, session_runtime
+                    "event": "user_message",
+                    "session_id": session_id,
+                    "choice": choice,
+                    "content": message,
+                },
+            )
+
+            yield {
+                "history": self.get_history(local_history, thinking=True),
+                "image_path": current_image_path,
+                "runtime": session_runtime,
+            }
 
             while True:
                 # Build messages with system context
                 messages = [system(system_message)]
-                messages.extend(message_history)
+                messages.extend(local_history)  # pyright: ignore
 
                 # Gather tools: combine per-session active tools with model-based additional tools
                 per_session_tools: list[RegisteredTool] = session_runtime.get(
@@ -475,30 +500,37 @@ class ChatInterface:
                     last_response = response
                     token = getattr(chunk, "content", None)
                     if token:
-                        yield local_history + [
-                            message_to_dict(assistant(response.content))
-                        ], current_image_path, session_runtime
+                        yield {
+                            "history": self.get_history(
+                                local_history,  # pyright: ignore
+                                message=assistant(response.content),
+                            ),
+                            "image_path": current_image_path,
+                            "runtime": session_runtime,
+                        }
 
                     for tool_call in chunk.tool_calls:
                         if get_tool_call_type(tool_call) == "client_side_tool":
                             client_tool_calls.append(tool_call)
-                        yield local_history + [
-                            {
-                                "role": "assistant",
-                                "content": "",
-                                "metadata": {
-                                    "title": f"Calling {tool_call.function.name}...",
-                                    "status": "pending",
-                                },
-                            }
-                        ], current_image_path, session_runtime
+                        yield {
+                            "history": self.get_history(
+                                local_history,  # pyright: ignore
+                                calling_function=tool_call.function.name,
+                            ),
+                            "image_path": current_image_path,
+                            "runtime": session_runtime,
+                        }
 
                 # Append this turn's assistant text (if any) to history
                 assistant_message_id: int | None = None
                 if last_response:
                     assistant_message = assistant(last_response.content)
                     assistant_message.tool_calls.extend(last_response.tool_calls)
-                    self.append_to_history(message_history, assistant_message)
+                    self._update_history(
+                        session_runtime,
+                        local_history,
+                        assistant_message,  # pyright: ignore
+                    )
 
                     tool_call_dicts = [
                         json_format.MessageToDict(tc) for tc in last_response.tool_calls
@@ -512,31 +544,21 @@ class ChatInterface:
                         estimated_cost=last_response.cost_usd,
                         estimated_tokens=last_response.usage.total_tokens,
                     )
-                    if isinstance(self.modelContext, ModelContext):
-                        self.modelContext.enqueue_log_event_for(
-                            session_id,
-                            {
-                                "event": "assistant_message",
-                                "session_id": session_id,
-                                "content": last_response.content,
-                                "tool_calls": tool_call_dicts,
-                                "estimated_cost": last_response.cost_usd,
-                            },
-                        )
-                    else:
-                        self.modelContext.enqueue_log_event(
-                            {
-                                "event": "assistant_message",
-                                "session_id": session_id,
-                                "content": last_response.content,
-                                "tool_calls": tool_call_dicts,
-                                "estimated_cost": last_response.cost_usd,
-                            }
-                        )
 
-                    local_history.append(message_to_dict(assistant_message))
+                    self.modelContext.enqueue_log_event_for(
+                        session_id,
+                        {
+                            "event": "assistant_message",
+                            "session_id": session_id,
+                            "content": last_response.content,
+                            "tool_calls": tool_call_dicts,
+                            "estimated_cost": last_response.cost_usd,
+                        },
+                    )
 
                 if client_tool_calls:
+                    image_generated = False
+
                     client_tool_calls_dict = {c.id: c for c in client_tool_calls}
                     tool_results = self._tool_handler(
                         per_session_tools, client_tool_calls
@@ -572,31 +594,18 @@ class ChatInterface:
                             estimated_cost=tr.cost,
                             access_token=session_runtime.get("access_token"),
                         )
-                        if isinstance(self.modelContext, ModelContext):
-                            self.modelContext.enqueue_log_event_for(
-                                session_id,
-                                {
-                                    "event": "tool_call",
-                                    "session_id": session_id,
-                                    "message_id": assistant_message_id,
-                                    "tool_name": tool_call_name,
-                                    "status": "ok",
-                                    "tool_call_id": tr.tool_call_id,
-                                    "output": output_payload,
-                                },
-                            )
-                        else:
-                            self.modelContext.enqueue_log_event(
-                                {
-                                    "event": "tool_call",
-                                    "session_id": session_id,
-                                    "message_id": assistant_message_id,
-                                    "tool_name": tool_call_name,
-                                    "status": "ok",
-                                    "tool_call_id": tr.tool_call_id,
-                                    "output": output_payload,
-                                }
-                            )
+                        self.modelContext.enqueue_log_event_for(
+                            session_id,
+                            {
+                                "event": "tool_call",
+                                "session_id": session_id,
+                                "message_id": assistant_message_id,
+                                "tool_name": tool_call_name,
+                                "status": "ok",
+                                "tool_call_id": tr.tool_call_id,
+                                "output": output_payload,
+                            },
+                        )
 
                         if is_image_mode:
                             # Side-effect: capture image ToolResult for "Generate Image" mode
@@ -607,24 +616,28 @@ class ChatInterface:
                                 and isinstance(tr.content, str)
                             ):
                                 current_image_path = tr.content
-                            # Yield so the UI can display the image promptly
-                            yield local_history + [
-                                message_to_dict(
-                                    assistant(
-                                        last_response.content if last_response else ""
-                                    )
+                                image_generated = True
+                                session_runtime["current_image_path"] = (
+                                    current_image_path
                                 )
-                            ], current_image_path, session_runtime
 
-                        self.append_to_history(
-                            message_history,
+                        self._update_history(
+                            session_runtime,
+                            local_history,
                             tool_result(
                                 tr.content_for_model, tool_call_id=tr.tool_call_id
                             ),
                         )
 
-                    if is_image_mode and current_image_path:
-                        break
+                    if is_image_mode:
+                        yield {
+                            "history": self.get_history(local_history),
+                            "image_path": current_image_path,
+                            "runtime": session_runtime,
+                        }
+
+                        if current_image_path and image_generated:
+                            break
                 else:
                     break
 
@@ -635,16 +648,10 @@ class ChatInterface:
                 "I encountered an error processing your request. Please try again."
             )
             error_message = assistant(error_msg)
-            self.append_to_history(message_history, error_message)
-            local_history.append(message_to_dict(error_message))
-            yield local_history, current_image_path, session_runtime
+            self._update_history(session_runtime, local_history, error_message)
 
-        if using_instance_state:
-            self.image_path = current_image_path
-
-    def clear_history(self) -> list[dict[str, Any]]:
-        """Clear stored chat history and reset the image output."""
-        self.chat_history = []
-        self.image_path = None
-        logger.info("Cleared chat history and reset image.")
-        return []
+        yield {
+            "history": self.get_history(local_history),
+            "image_path": current_image_path,
+            "runtime": session_runtime,
+        }
