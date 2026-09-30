@@ -356,10 +356,14 @@ class ChatInterface:
         return Tools.handle_tool_calls(active_tools, message)
 
     def _update_history(
-        self, history: list[chat_pb2.Message], message: chat_pb2.Message
+        self,
+        session_runtime: SessionRuntime,
+        history: list[chat_pb2.Message],
+        message: chat_pb2.Message,
     ) -> None:
         """Append a message to the chat history."""
         history.append(message)
+        session_runtime["chat_history"] = history
         logger.debug(f"Appended message to history: {message_to_dict(message)}")
 
     def get_history(
@@ -407,24 +411,19 @@ class ChatInterface:
         choice: str,
         *,
         runtime: SessionRuntime | None = None,
-        image_path: Optional[str] = None,
     ) -> Generator[ChatResult, None, None]:
         """Stream chat responses token by token and handle tool calls.
 
         Args:
             message (str): The user's input message.
-            chat_history (list[dict[str, Any]]): Current chat history from the UI.
+            runtime (SessionRuntime | None): The current session runtime containing chat history and other session-specific data.
             choice (str): Selected chat mode, such as question or image generation.
 
         Yields:
             ChatResult: Intermediate chat history, optional image data, and updated session runtime.
         """
         session_runtime = self._ensure_runtime(choice, runtime)
-        current_image_path = (
-            image_path
-            if image_path is not None
-            else session_runtime.get("current_image_path")
-        )
+        current_image_path = session_runtime.get("current_image_path")
         local_history = list(session_runtime.get("chat_history", []))
         if not message:
             yield {
@@ -455,7 +454,7 @@ class ChatInterface:
             session_runtime["session_mode"] = session_mode
 
             # Add user message to history
-            self._update_history(local_history, user(message))
+            self._update_history(session_runtime, local_history, user(message))
             self._persist_message(
                 session_id=session_id,
                 role="user",
@@ -528,7 +527,9 @@ class ChatInterface:
                     assistant_message = assistant(last_response.content)
                     assistant_message.tool_calls.extend(last_response.tool_calls)
                     self._update_history(
-                        local_history, assistant_message  # pyright: ignore
+                        session_runtime,
+                        local_history,
+                        assistant_message,  # pyright: ignore
                     )
 
                     tool_call_dicts = [
@@ -556,6 +557,8 @@ class ChatInterface:
                     )
 
                 if client_tool_calls:
+                    image_generated = False
+
                     client_tool_calls_dict = {c.id: c for c in client_tool_calls}
                     tool_results = self._tool_handler(
                         per_session_tools, client_tool_calls
@@ -613,6 +616,7 @@ class ChatInterface:
                                 and isinstance(tr.content, str)
                             ):
                                 current_image_path = tr.content
+                                image_generated = True
                             # Yield so the UI can display the image promptly
                             yield {
                                 "history": self.get_history(
@@ -623,13 +627,14 @@ class ChatInterface:
                             }
 
                         self._update_history(
+                            session_runtime,
                             local_history,
                             tool_result(
                                 tr.content_for_model, tool_call_id=tr.tool_call_id
                             ),
                         )
 
-                    if is_image_mode and current_image_path:
+                    if is_image_mode and current_image_path and image_generated:
                         break
                 else:
                     break
@@ -641,9 +646,8 @@ class ChatInterface:
                 "I encountered an error processing your request. Please try again."
             )
             error_message = assistant(error_msg)
-            self._update_history(local_history, error_message)
+            self._update_history(session_runtime, local_history, error_message)
 
-        session_runtime["chat_history"] = local_history
         session_runtime["current_image_path"] = current_image_path
 
         yield {

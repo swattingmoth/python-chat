@@ -859,12 +859,25 @@ def test_chat_image_mode_no_image_path_does_not_crash(
         ]
     )
 
+    # test with no image path
     iface = ChatInterface(mock_context, completer=completer, tool_handler=handler)
     runtime = _make_runtime()
 
     turns = list(iface.chat("draw", "Generate Image", runtime=runtime))
     assert turns
     assert turns[-1]["runtime"]["current_image_path"] is None
+    assert call_count == 2
+
+    # test with previous image path
+    call_count = 0
+    iface = ChatInterface(mock_context, completer=completer, tool_handler=handler)
+    runtime = _make_runtime()
+    runtime["current_image_path"] = "previous_image.png"
+
+    turns = list(iface.chat("draw", "Generate Image", runtime=runtime))
+    assert turns
+    assert turns[-1]["runtime"]["current_image_path"] == "previous_image.png"
+    assert call_count == 2
 
 
 def test_message_to_dict_includes_tool_calls() -> None:
