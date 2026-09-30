@@ -617,14 +617,9 @@ class ChatInterface:
                             ):
                                 current_image_path = tr.content
                                 image_generated = True
-                            # Yield so the UI can display the image promptly
-                            yield {
-                                "history": self.get_history(
-                                    local_history  # pyright: ignore
-                                ),
-                                "image_path": current_image_path,
-                                "runtime": session_runtime,
-                            }
+                                session_runtime["current_image_path"] = (
+                                    current_image_path
+                                )
 
                         self._update_history(
                             session_runtime,
@@ -634,8 +629,15 @@ class ChatInterface:
                             ),
                         )
 
-                    if is_image_mode and current_image_path and image_generated:
-                        break
+                    if is_image_mode:
+                        yield {
+                            "history": self.get_history(local_history),
+                            "image_path": current_image_path,
+                            "runtime": session_runtime,
+                        }
+
+                        if current_image_path and image_generated:
+                            break
                 else:
                     break
 
@@ -647,8 +649,6 @@ class ChatInterface:
             )
             error_message = assistant(error_msg)
             self._update_history(session_runtime, local_history, error_message)
-
-        session_runtime["current_image_path"] = current_image_path
 
         yield {
             "history": self.get_history(local_history),
