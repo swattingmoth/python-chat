@@ -14,7 +14,7 @@
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/node:2": {},
-		"ghcr.io/devcontainer-config/features/dot-config:4": {}
+		"ghcr.io/devcontainer-config/features/dot-config:5": {}
 	},
 	"mounts": [
 		// Creates an isolated, high-performance Linux volume just for the container's virtual environment
