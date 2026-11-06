@@ -123,6 +123,11 @@ def test_resolve_identity_reads_request_state(monkeypatch: Any) -> None:
     assert _resolve_identity(None) == (None, None)
 
 
+@pytest.fixture(autouse=True)
+def _skip_server_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTHON_CHAT_SKIP_SERVER_BOOTSTRAP", "1")
+
+
 def _create_test_app(monkeypatch: Any, server_module: Any) -> Any:
     monkeypatch.setattr(server_module, "initialize_runtime", lambda: None)
     monkeypatch.setattr(server_module, "launch_app", lambda **_: object())
