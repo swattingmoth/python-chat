@@ -897,3 +897,147 @@ def test_message_to_dict_includes_tool_calls() -> None:
     assert parsed["role"] == result["role"]
     assert parsed["content"] == result["content"]
     assert parsed["tool_calls"][0]["id"] == "call_1"
+
+
+def test_to_proto_history_converts_supported_roles_and_ignores_invalid_entries() -> (
+    None
+):
+    from python_chat.chat import ChatInterface
+
+    iface = ChatInterface(MagicMock())
+    converted = iface._to_proto_history(
+        [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "answer"},
+            {"role": "tool", "content": "result", "tool_call_id": "call-1"},
+            {"role": "tool", "content": "without id"},
+            {"role": "system", "content": "ignored"},
+            {"role": "user", "content": 123},
+        ]
+    )
+
+    assert [message.role for message in converted] == [
+        chat_pb2.MessageRole.ROLE_USER,
+        chat_pb2.MessageRole.ROLE_ASSISTANT,
+        chat_pb2.MessageRole.ROLE_TOOL,
+    ]
+    assert [message.content[0].text for message in converted] == [
+        "question",
+        "answer",
+        "result",
+    ]
+    assert converted[-1].tool_call_id == "call-1"
+
+
+def test_persist_message_returns_none_without_user_scoped_rpc_client(
+    monkeypatch: Any,
+) -> None:
+    model_context = MagicMock()
+    model_context.persistence_client = SimpleNamespace(
+        enabled=True,
+        rpc_client_for_role=lambda *_args, **_kwargs: None,
+    )
+    iface = ChatInterface(model_context)
+    create_message = MagicMock()
+    monkeypatch.setattr("python_chat.chat.db.create_chat_message", create_message)
+
+    result = iface._persist_message(
+        session_id=3,
+        role="user",
+        content="hello",
+        access_token="expired-token",
+    )
+
+    assert result is None
+    create_message.assert_not_called()
+
+
+def test_persist_tool_call_success_and_user_rpc_guard(monkeypatch: Any) -> None:
+    model_context = MagicMock()
+    iface = ChatInterface(model_context)
+    create_call = MagicMock(return_value=44)
+    monkeypatch.setattr("python_chat.chat.db.create_tool_call", create_call)
+
+    model_context.persistence_client = SimpleNamespace(
+        enabled=True,
+        rpc_client_for_role=lambda *_args, **_kwargs: None,
+    )
+    iface._persist_tool_call(
+        message_id=1,
+        tool_name="echo",
+        status="ok",
+        input_args={"text": "hi"},
+        output_result={"text": "hi"},
+        error_message=None,
+        latency_ms=3,
+        access_token="missing-user-client",
+    )
+    create_call.assert_not_called()
+
+    rpc_client = object()
+    model_context.persistence_client = SimpleNamespace(
+        enabled=True,
+        rpc_client_for_role=lambda *_args, **_kwargs: rpc_client,
+    )
+    iface._persist_tool_call(
+        message_id=1,
+        tool_name="echo",
+        status="ok",
+        input_args={"text": "hi"},
+        output_result={"text": "hi"},
+        error_message=None,
+        latency_ms=3,
+        estimated_cost=0.01,
+        access_token="user-token",
+    )
+    create_call.assert_called_once()
+    assert create_call.call_args.args[0] is rpc_client
+
+
+def test_chat_uses_explicit_runtime_history_and_updates_request_counter() -> None:
+    context = ModelContext(MagicMock(), "")
+    captured_messages: list[chat_pb2.Message] = []
+    response = SimpleNamespace(
+        content="response",
+        tool_calls=[],
+        cost_usd=0.0,
+        usage=SimpleNamespace(total_tokens=1),
+    )
+    chunk = SimpleNamespace(content="response", tool_calls=[])
+
+    def completer(
+        model: str, messages: Sequence[chat_pb2.Message], tools: list[Any]
+    ) -> Generator[tuple[Any, Any], None, None]:
+        del model, tools
+        captured_messages.extend(messages)
+        yield response, chunk
+
+    iface = ChatInterface(context, completer=completer)
+    runtime: SessionRuntime = {
+        "user_id": "user-1",
+        "access_token": "user-token",
+        "session_id": None,
+        "session_mode": None,
+        "selected_choice": "Question",
+        "model_name": "old-model",
+        "request_counter": 1,
+        "active_tools": [],
+        "chat_history": [user("earlier question"), assistant("earlier answer")],
+        "current_image_path": None,
+    }
+
+    turns = list(iface.chat("new question", "Question", runtime=runtime))
+
+    assert turns
+    assert [message.role for message in captured_messages] == [
+        chat_pb2.MessageRole.ROLE_SYSTEM,
+        chat_pb2.MessageRole.ROLE_USER,
+        chat_pb2.MessageRole.ROLE_ASSISTANT,
+        chat_pb2.MessageRole.ROLE_USER,
+    ]
+    assert turns[-1]["runtime"]["request_counter"] == 2
+    assert turns[-1]["runtime"]["session_mode"] is None
+    assert [
+        message_to_dict(message)["role"]
+        for message in turns[-1]["runtime"]["chat_history"]
+    ] == ["user", "assistant", "user", "assistant"]
