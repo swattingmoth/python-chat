@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -500,3 +503,97 @@ def test_supabase_client_rpc_role_routing(monkeypatch: Any) -> None:
 
     assert user_rpc_one is not None
     assert user_rpc_two is user_rpc_one
+
+
+def test_http_rpc_call_posts_json_with_user_token_and_parses_response(
+    monkeypatch: Any,
+) -> None:
+    from python_chat.persistence import HttpRpcClient
+
+    captured: dict[str, Any] = {}
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"ok": true}'
+
+    def fake_urlopen(request: Any, *, timeout: int) -> _Response:
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr("python_chat.persistence.urllib_request.urlopen", fake_urlopen)
+    client = HttpRpcClient(
+        url="https://db.example/",
+        api_key="anon-key",
+        access_token="user-jwt",
+    )
+    response = client.rpc("record_event", {"event": "started"}).execute()
+    request = captured["request"]
+
+    assert request.full_url == "https://db.example/rest/v1/rpc/record_event"
+    assert request.get_method() == "POST"
+    assert request.get_header("Authorization") == "Bearer user-jwt"
+    assert request.get_header("Apikey") == "anon-key"
+    assert request.get_header("Content-type") == "application/json"
+    assert request.data == b'{"event": "started"}'
+    assert captured["timeout"] == 10
+    assert response.data == {"ok": True}
+
+
+def test_http_rpc_call_returns_none_for_empty_response(monkeypatch: Any) -> None:
+    from python_chat.persistence import HttpRpcClient
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b""
+
+    monkeypatch.setattr(
+        "python_chat.persistence.urllib_request.urlopen",
+        lambda *_args, **_kwargs: _Response(),
+    )
+    client = HttpRpcClient(url="https://db.example", api_key="key")
+
+    assert client.rpc("empty", {}).execute().data is None
+
+
+@pytest.mark.parametrize(
+    ("urlopen_error", "message"),
+    [
+        (
+            HTTPError(
+                "https://db.example/rpc",
+                403,
+                "Forbidden",
+                Message(),
+                BytesIO(b"denied"),
+            ),
+            "failed with status 403: denied",
+        ),
+        (URLError("offline"), "request failed: offline"),
+    ],
+)
+def test_http_rpc_call_wraps_transport_errors(
+    monkeypatch: Any, urlopen_error: Exception, message: str
+) -> None:
+    from python_chat.persistence import HttpRpcClient
+
+    def fail(*_: Any, **__: Any) -> Any:
+        raise urlopen_error
+
+    monkeypatch.setattr("python_chat.persistence.urllib_request.urlopen", fail)
+    client = HttpRpcClient(url="https://db.example", api_key="key")
+
+    with pytest.raises(RuntimeError, match=message):
+        client.rpc("failing_call", {}).execute()
