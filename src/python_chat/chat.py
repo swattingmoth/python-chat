@@ -1,3 +1,4 @@
+# TODO: remove references to request_counter as it is never used
 from __future__ import annotations
 
 import json

@@ -104,6 +104,10 @@ class HttpRpcCall:
 class SupabaseClient:
     """Thin wrapper around supabase-py with graceful no-op fallbacks."""
 
+    # TODO: Add an instance variable that is a dictionary of URL replacements
+    #   When getting the public URL, make the replacement based on this dictionary.
+    #   This will allow mapping host.docker.internal to localhost or other custom URL replacements.
+
     def __init__(
         self,
         *,
@@ -112,6 +116,7 @@ class SupabaseClient:
         anon_key: str | None = None,
         user_id: str | None = None,
         client: Any = None,
+        url_replacements: dict[str, str] | None = None,
     ) -> None:
         self._url = _normalize_config_value(url or os.getenv("SUPABASE_URL"))
         logger.info(f"Initializing SupabaseClient with URL: {self._url}")
@@ -132,6 +137,7 @@ class SupabaseClient:
         self._client = client
         self._user_rpc_clients: dict[str, HttpRpcClient] = {}
         self._service_rpc_client: Any = None
+        self._url_replacements = url_replacements or {}
 
         if self._client is None and self._url and self._key:
             try:
